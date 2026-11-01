@@ -6,7 +6,7 @@ source.dir = .
 source.include_exts = py,html,json,png,jpg
 version = 8.01
 main.filename = v8.01.py
-requirements = python3,kivy,pyjnius
+requirements = python3,kivy,pyjnius==1.5.0
 
 orientation = landscape
 fullscreen = 0
