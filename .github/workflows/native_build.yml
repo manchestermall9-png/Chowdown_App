@@ -40,6 +40,11 @@ jobs:
         cp -f *.json app/src/main/assets/ 2>/dev/null || true
         cp -f *.txt app/src/main/assets/ 2>/dev/null || true
 
+        cat << 'EOF' > gradle.properties
+        android.useAndroidX=true
+        android.enableJetifier=true
+        EOF
+
         cat << 'EOF' > settings.gradle
         rootProject.name = "ChowDownPOS"
         include ':app'
