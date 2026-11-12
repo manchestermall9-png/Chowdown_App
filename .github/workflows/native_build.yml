@@ -21,11 +21,24 @@ jobs:
 
     - name: Set up Android SDK
       uses: android-actions/setup-android@v3
+      with:
+        packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+        accept-android-sdk-licenses: true
 
-    - name: Generate Project Structure
+    - name: Set up Gradle
+      uses: gradle/actions/setup-gradle@v4
+      with:
+        gradle-version: '8.5'
+
+    - name: Generate Project Structure & Copy v8.7 Files
       run: |
         mkdir -p app/src/main/java/org/chowdown/pos
         mkdir -p app/src/main/res/values
+        mkdir -p app/src/main/assets
+
+        cp -f *.html app/src/main/assets/ 2>/dev/null || true
+        cp -f *.json app/src/main/assets/ 2>/dev/null || true
+        cp -f *.txt app/src/main/assets/ 2>/dev/null || true
 
         cat << 'EOF' > settings.gradle
         rootProject.name = "ChowDownPOS"
@@ -39,7 +52,7 @@ jobs:
                 mavenCentral()
             }
             dependencies {
-                classpath 'com.android.tools.build:gradle:8.1.0'
+                classpath 'com.android.tools.build:gradle:8.2.2'
             }
         }
         allprojects {
@@ -55,16 +68,19 @@ jobs:
 
         android {
             namespace 'org.chowdown.pos'
-            compileSdk 33
+            compileSdk 34
 
             defaultConfig {
                 applicationId "org.chowdown.pos"
                 minSdk 21
-                targetSdk 33
-                versionCode 801
-                versionName "8.01"
+                targetSdk 34
+                versionCode 870
+                versionName "8.7"
             }
             buildTypes {
+                debug {
+                    minifyEnabled false
+                }
                 release {
                     minifyEnabled false
                 }
@@ -80,8 +96,10 @@ jobs:
         <?xml version="1.0" encoding="utf-8"?>
         <manifest xmlns:android="http://schemas.android.com/apk/res/android">
             <uses-permission android:name="android.permission.INTERNET" />
+            <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
             <application
-                android:label="Chow Down POS"
+                android:label="Chow Down POS v8.7"
+                android:usesCleartextTraffic="true"
                 android:theme="@style/Theme.AppCompat.NoActionBar">
                 <activity
                     android:name=".MainActivity"
@@ -112,19 +130,21 @@ jobs:
                 setContentView(webView);
                 WebSettings webSettings = webView.getSettings();
                 webSettings.setJavaScriptEnabled(true);
+                webSettings.setDomStorageEnabled(true);
+                webSettings.setAllowFileAccess(true);
                 webView.setWebViewClient(new WebViewClient());
-                webView.loadUrl("http://10.0.2.2:8080");
+                
+                // Connects to your Blackview Tab 8 server running on port 8080
+                webView.loadUrl("http://192.168.1.119:8080");
             }
         }
         EOF
 
-    - name: Compile Release APK
-      run: |
-        export ANDROID_HOME=$ANDROID_SDK_ROOT
-        gradle assembleRelease --no-daemon
+    - name: Build Installable v8.7 APK
+      run: gradle assembleDebug --no-daemon
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ChowDown_v8.01_APK
-        path: app/build/outputs/apk/release/*.apk
+        name: ChowDown_v8.7_APK
+        path: app/build/outputs/apk/debug/*.apk
