@@ -30,7 +30,7 @@ jobs:
       with:
         gradle-version: '8.5'
 
-    - name: Generate Project Structure & Copy v8.7 Files
+    - name: Generate Project Structure & Copy v9.00 Files
       run: |
         mkdir -p app/src/main/java/org/chowdown/pos
         mkdir -p app/src/main/res/values
@@ -79,8 +79,8 @@ jobs:
                 applicationId "org.chowdown.pos"
                 minSdk 21
                 targetSdk 34
-                versionCode 870
-                versionName "8.7"
+                versionCode 900
+                versionName "9.00"
             }
             buildTypes {
                 debug {
@@ -103,7 +103,7 @@ jobs:
             <uses-permission android:name="android.permission.INTERNET" />
             <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
             <application
-                android:label="Chow Down POS v8.7"
+                android:label="Chow Down POS v9.00"
                 android:usesCleartextTraffic="true"
                 android:theme="@style/Theme.AppCompat.NoActionBar">
                 <activity
@@ -121,35 +121,99 @@ jobs:
         cat << 'EOF' > app/src/main/java/org/chowdown/pos/MainActivity.java
         package org.chowdown.pos;
 
+        import android.app.AlertDialog;
+        import android.content.SharedPreferences;
         import android.os.Bundle;
+        import android.text.InputType;
         import android.webkit.WebSettings;
         import android.webkit.WebView;
         import android.webkit.WebViewClient;
+        import android.widget.EditText;
         import androidx.appcompat.app.AppCompatActivity;
 
         public class MainActivity extends AppCompatActivity {
+            private WebView webView;
+            private SharedPreferences prefs;
+
             @Override
             protected void onCreate(Bundle savedInstanceState) {
                 super.onCreate(savedInstanceState);
-                WebView webView = new WebView(this);
+                
+                prefs = getSharedPreferences("ChowDownPrefs", MODE_PRIVATE);
+                String savedUrl = prefs.getString("server_url", null);
+
+                if (savedUrl == null) {
+                    showServerConfigurationDialog();
+                } else {
+                    loadWebView(savedUrl);
+                }
+            }
+
+            private void showServerConfigurationDialog() {
+                AlertDialog.Builder builder = new AlertDialog.Builder(this);
+                builder.setTitle("Chow Down POS - Server Setup");
+                builder.setMessage("Where is the backend server located?");
+
+                builder.setPositiveButton("This Device is the Server", (dialog, which) -> {
+                    String url = "http://127.0.0.1:8080";
+                    prefs.edit().putString("server_url", url).apply();
+                    loadWebView(url);
+                });
+
+                builder.setNegativeButton("Another Device (Enter IP)", (dialog, which) -> {
+                    showIpInputDialog();
+                });
+
+                builder.setCancelable(false);
+                builder.show();
+            }
+
+            private void showIpInputDialog() {
+                AlertDialog.Builder builder = new AlertDialog.Builder(this);
+                builder.setTitle("Enter Server IP Address");
+
+                final EditText input = new EditText(this);
+                input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+                input.setHint("e.g. 192.168.1.119 or 172.20.10.2");
+                input.setText("192.168.1.119");
+                builder.setView(input);
+
+                builder.setPositiveButton("Connect", (dialog, which) -> {
+                    String ip = input.getText().toString().trim();
+                    if (ip.isEmpty()) {
+                        ip = "192.168.1.119";
+                    }
+                    String url = "http://" + ip + ":8080";
+                    prefs.edit().putString("server_url", url).apply();
+                    loadWebView(url);
+                });
+
+                builder.setNegativeButton("Back", (dialog, which) -> {
+                    showServerConfigurationDialog();
+                });
+
+                builder.setCancelable(false);
+                builder.show();
+            }
+
+            private void loadWebView(String url) {
+                webView = new WebView(this);
                 setContentView(webView);
                 WebSettings webSettings = webView.getSettings();
                 webSettings.setJavaScriptEnabled(true);
                 webSettings.setDomStorageEnabled(true);
                 webSettings.setAllowFileAccess(true);
                 webView.setWebViewClient(new WebViewClient());
-                
-                // Connects to your Blackview Tab 8 server running on port 8080
-                webView.loadUrl("http://192.168.1.119:8080");
+                webView.loadUrl(url);
             }
         }
         EOF
 
-    - name: Build Installable v8.7 APK
+    - name: Build Installable v9.00 APK
       run: gradle assembleDebug --no-daemon
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ChowDown_v8.7_APK
+        name: ChowDown_v9.00_APK
         path: app/build/outputs/apk/debug/*.apk
