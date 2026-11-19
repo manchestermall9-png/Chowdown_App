@@ -10,274 +10,137 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
-      with:
-        distribution: 'temurin'
-        java-version: '17'
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
 
-    - name: Set up Android SDK
-      uses: android-actions/setup-android@v3
-      with:
-        packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
-        accept-android-sdk-licenses: true
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+          accept-android-sdk-licenses: true
 
-    - name: Set up Gradle
-      uses: gradle/actions/setup-gradle@v4
-      with:
-        gradle-version: '8.5'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.5'
 
-    - name: Generate Project Structure & Copy v9.10 Files
-      run: |
-        mkdir -p app/src/main/java/org/chowdown/pos
-        mkdir -p app/src/main/res/values
-        mkdir -p app/src/main/assets
+      - name: Generate Project Structure & Copy v9.10 Files
+        run: |
+          mkdir -p app/src/main/java/org/chowdown/pos
+          mkdir -p app/src/main/res/values
+          mkdir -p app/src/main/assets
 
-        cp -f *.html app/src/main/assets/ 2>/dev/null || true
-        cp -f *.json app/src/main/assets/ 2>/dev/null || true
-        cp -f *.txt app/src/main/assets/ 2>/dev/null || true
+          cp -f *.html app/src/main/assets/ 2>/dev/null || true
+          cp -f *.json app/src/main/assets/ 2>/dev/null || true
+          cp -f *.txt app/src/main/assets/ 2>/dev/null || true
+          cp -f v9.10.py app/src/main/assets/main.py
+          cp -f MainActivity.java app/src/main/java/org/chowdown/pos/MainActivity.java
 
-        cat << 'EOF' > gradle.properties
-        android.useAndroidX=true
-        android.enableJetifier=true
-        EOF
+          cat << 'EOF' > gradle.properties
+          android.useAndroidX=true
+          android.enableJetifier=true
+          org.gradle.jvmargs=-Xmx2048m
+          EOF
 
-        cat << 'EOF' > settings.gradle
-        rootProject.name = "FoodOrderApp"
-        include ':app'
-        EOF
+          cat << 'EOF' > settings.gradle
+          rootProject.name = "Food Order App"
+          include ':app'
+          EOF
 
-        cat << 'EOF' > build.gradle
-        buildscript {
-            repositories {
-                google()
-                mavenCentral()
-            }
-            dependencies {
-                classpath 'com.android.tools.build:gradle:8.2.2'
-            }
-        }
-        allprojects {
-            repositories {
-                google()
-                mavenCentral()
-            }
-        }
-        EOF
+          cat << 'EOF' > build.gradle
+          buildscript {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:8.2.2'
+              }
+          }
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          EOF
 
-        cat << 'EOF' > app/build.gradle
-        apply plugin: 'com.android.application'
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+          }
+          android {
+              namespace 'org.chowdown.pos'
+              compileSdk 34
+              defaultConfig {
+                  applicationId "org.chowdown.pos"
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 910
+                  versionName "9.10"
+              }
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                  }
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          dependencies {
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+              implementation 'com.google.android.material:material:1.11.0'
+          }
+          EOF
 
-        android {
-            namespace 'org.chowdown.pos'
-            compileSdk 34
+          cat << 'EOF' > app/src/main/res/values/strings.xml
+          <resources>
+              <string name="app_name">Food Order App</string>
+          </resources>
+          EOF
 
-            defaultConfig {
-                applicationId "org.chowdown.pos"
-                minSdk 21
-                targetSdk 34
-                versionCode 910
-                versionName "9.10"
-            }
-            buildTypes {
-                debug {
-                    minifyEnabled false
-                }
-                release {
-                    minifyEnabled true
-                    proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-                }
-            }
-        }
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+              <uses-permission android:name="android.permission.BLUETOOTH" />
+              <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+              <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+              <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
 
-        dependencies {
-            implementation 'androidx.appcompat:appcompat:1.6.1'
-        }
-        EOF
+              <application
+                  android:allowBackup="true"
+                  android:label="@string/app_name"
+                  android:usesCleartextTraffic="true"
+                  android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:screenOrientation="unspecified">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
 
-        cat << 'EOF' > app/src/main/AndroidManifest.xml
-        <?xml version="1.0" encoding="utf-8"?>
-        <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-            <uses-permission android:name="android.permission.INTERNET" />
-            <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-            <application
-                android:label="Food Order App"
-                android:usesCleartextTraffic="true"
-                android:theme="@style/Theme.AppCompat.NoActionBar">
-                <activity
-                    android:name=".MainActivity"
-                    android:exported="true">
-                    <intent-filter>
-                        <action android:name="android.intent.action.MAIN" />
-                        <category android:name="android.intent.category.LAUNCHER" />
-                    </intent-filter>
-                </activity>
-            </application>
-        </manifest>
-        EOF
+      - name: Build Debug APK
+        run: gradle assembleDebug
 
-        cat << 'EOF' > app/src/main/java/org/chowdown/pos/MainActivity.java
-        package org.chowdown.pos;
-
-        import android.app.AlertDialog;
-        import android.content.SharedPreferences;
-        import android.os.Bundle;
-        import android.provider.Settings;
-        import android.text.InputType;
-        import android.webkit.WebSettings;
-        import android.webkit.WebView;
-        import android.webkit.WebViewClient;
-        import android.widget.EditText;
-        import android.widget.LinearLayout;
-        import android.widget.TextView;
-        import androidx.appcompat.app.AppCompatActivity;
-
-        public class MainActivity extends AppCompatActivity {
-            private WebView webView;
-            private SharedPreferences prefs;
-            private String androidId;
-
-            @Override
-            protected void onCreate(Bundle savedInstanceState) {
-                super.onCreate(savedInstanceState);
-
-                prefs = getSharedPreferences("FoodOrderPrefs", MODE_PRIVATE);
-                androidId = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
-                if (androidId == null) {
-                    androidId = "UNKNOWN_DEVICE";
-                }
-
-                boolean isLicensed = prefs.getBoolean("is_licensed", false);
-
-                if (!isLicensed) {
-                    showActivationDialog();
-                } else {
-                    checkServerConfig();
-                }
-            }
-
-            private void showActivationDialog() {
-                AlertDialog.Builder builder = new AlertDialog.Builder(this);
-                builder.setTitle("Food Order App - Activation Required");
-
-                LinearLayout layout = new LinearLayout(this);
-                layout.setOrientation(LinearLayout.VERTICAL);
-                layout.setPadding(50, 40, 50, 10);
-
-                TextView tvInfo = new TextView(this);
-                tvInfo.setText("Please provide this Device ID to activate your license:\n\n" + androidId);
-                tvInfo.setTextIsSelectable(true);
-                layout.addView(tvInfo);
-
-                final EditText input = new EditText(this);
-                input.setInputType(InputType.TYPE_CLASS_TEXT);
-                input.setHint("Enter Activation Key");
-                layout.addView(input);
-
-                builder.setView(layout);
-
-                builder.setPositiveButton("Activate", (dialog, which) -> {
-                    String key = input.getText().toString().trim();
-                    if (isValidKey(androidId, key)) {
-                        prefs.edit().putBoolean("is_licensed", true).apply();
-                        checkServerConfig();
-                    } else {
-                        new AlertDialog.Builder(this)
-                            .setTitle("Invalid Key")
-                            .setMessage("The activation key entered is incorrect. Please try again.")
-                            .setPositiveButton("OK", (d, w) -> showActivationDialog())
-                            .setCancelable(false)
-                            .show();
-                    }
-                });
-
-                builder.setNegativeButton("Exit", (dialog, which) -> finish());
-                builder.setCancelable(false);
-                builder.show();
-            }
-
-            private boolean isValidKey(String deviceId, String key) {
-                String expectedKey = "FOA-" + Math.abs(deviceId.hashCode());
-                return key.equals(expectedKey) || key.equals("FOODORDER2026");
-            }
-
-            private void checkServerConfig() {
-                String savedUrl = prefs.getString("server_url", null);
-                if (savedUrl == null) {
-                    showServerConfigurationDialog();
-                } else {
-                    loadWebView(savedUrl);
-                }
-            }
-
-            private void showServerConfigurationDialog() {
-                AlertDialog.Builder builder = new AlertDialog.Builder(this);
-                builder.setTitle("Food Order App - Server Setup");
-                builder.setMessage("Where is the backend server located?");
-
-                builder.setPositiveButton("This Device is the Server", (dialog, which) -> {
-                    String url = "http://127.0.0.1:8080";
-                    prefs.edit().putString("server_url", url).apply();
-                    loadWebView(url);
-                });
-
-                builder.setNegativeButton("Another Device (Enter IP)", (dialog, which) -> {
-                    showIpInputDialog();
-                });
-
-                builder.setCancelable(false);
-                builder.show();
-            }
-
-            private void showIpInputDialog() {
-                AlertDialog.Builder builder = new AlertDialog.Builder(this);
-                builder.setTitle("Enter Server IP Address");
-
-                final EditText input = new EditText(this);
-                input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-                input.setHint("e.g. 192.168.1.119 or 172.20.10.2");
-                input.setText("192.168.1.119");
-                builder.setView(input);
-
-                builder.setPositiveButton("Connect", (dialog, which) -> {
-                    String ip = input.getText().toString().trim();
-                    if (ip.isEmpty()) {
-                        ip = "192.168.1.119";
-                    }
-                    String url = "http://" + ip + ":8080";
-                    prefs.edit().putString("server_url", url).apply();
-                    loadWebView(url);
-                });
-
-                builder.setNegativeButton("Back", (dialog, which) -> {
-                    showServerConfigurationDialog();
-                });
-
-                builder.setCancelable(false);
-                builder.show();
-            }
-
-            private void loadWebView(String url) {
-                webView = new WebView(this);
-                setContentView(webView);
-                WebSettings webSettings = webView.getSettings();
-                webSettings.setJavaScriptEnabled(true);
-                webSettings.setDomStorageEnabled(true);
-                webSettings.setAllowFileAccess(true);
-                webView.setWebViewClient(new WebViewClient());
-                webView.loadUrl(url);
-            }
-        }
-        EOF
-
-    - name: Build Installable v9.10 APK
-      run: gradle assembleDebug --no-daemon
-
-    - name: Upload APK Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: FoodOrderApp_v9.10_APK
-        path: app/build/outputs/apk/debug/*.apk
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FoodOrderApp-v9.10-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
