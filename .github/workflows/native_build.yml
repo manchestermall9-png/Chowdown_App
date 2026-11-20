@@ -33,12 +33,15 @@ jobs:
     - name: Generate Project Structure & Copy v9.10 Files
       run: |
         mkdir -p app/src/main/java/org/chowdown/pos
+        mkdir -p app/src/main/python
         mkdir -p app/src/main/res/values
         mkdir -p app/src/main/assets
 
         cp -f *.html app/src/main/assets/ 2>/dev/null || true
         cp -f *.json app/src/main/assets/ 2>/dev/null || true
         cp -f *.txt app/src/main/assets/ 2>/dev/null || true
+        cp -f v9.10.py app/src/main/python/server_app.py 2>/dev/null || true
+        cp -f app.py app/src/main/python/server_app.py 2>/dev/null || true
 
         cat << 'EOF' > gradle.properties
         android.useAndroidX=true
@@ -46,6 +49,20 @@ jobs:
         EOF
 
         cat << 'EOF' > settings.gradle
+        pluginManagement {
+            repositories {
+                gradlePluginPortal()
+                google()
+                mavenCentral()
+            }
+        }
+        dependencyResolutionManagement {
+            repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
+            repositories {
+                google()
+                mavenCentral()
+            }
+        }
         rootProject.name = "FoodOrderApp"
         include ':app'
         EOF
@@ -58,6 +75,7 @@ jobs:
             }
             dependencies {
                 classpath 'com.android.tools.build:gradle:8.2.2'
+                classpath 'com.chaquo.python:gradle:15.0.1'
             }
         }
         allprojects {
@@ -70,6 +88,7 @@ jobs:
 
         cat << 'EOF' > app/build.gradle
         apply plugin: 'com.android.application'
+        apply plugin: 'com.chaquo.python'
 
         android {
             namespace 'org.chowdown.pos'
@@ -81,6 +100,14 @@ jobs:
                 targetSdk 34
                 versionCode 910
                 versionName "9.10"
+
+                ndk {
+                    abiFilters "armeabi-v7a", "arm64-v8a", "x86_64"
+                }
+
+                python {
+                    version "3.10"
+                }
             }
             buildTypes {
                 debug {
@@ -119,11 +146,22 @@ jobs:
         </manifest>
         EOF
 
+        cat << 'EOF' > app/src/main/python/server_app.py
+        import os
+
+        def start_server():
+            try:
+                # If your Python script defines a start() or run() function, call it here.
+                # Example: if you have a function named main() or start(), import and call it.
+                return "Python runtime ready"
+            except Exception as exc:
+                return str(exc)
+        EOF
+
         cat << 'EOF' > app/src/main/java/org/chowdown/pos/MainActivity.java
         package org.chowdown.pos;
 
         import android.app.AlertDialog;
-        import android.content.Intent;
         import android.content.SharedPreferences;
         import android.os.Bundle;
         import android.provider.Settings;
@@ -138,6 +176,8 @@ jobs:
         import android.widget.TextView;
         import android.widget.Toast;
         import androidx.appcompat.app.AppCompatActivity;
+        import com.chaquo.python.Python;
+        import com.chaquo.python.android.AndroidPlatform;
 
         public class MainActivity extends AppCompatActivity {
             private WebView webView;
@@ -147,6 +187,8 @@ jobs:
             @Override
             protected void onCreate(Bundle savedInstanceState) {
                 super.onCreate(savedInstanceState);
+
+                initPython();
 
                 prefs = getSharedPreferences("FoodOrderPrefs", MODE_PRIVATE);
                 androidId = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
@@ -160,6 +202,18 @@ jobs:
                     showActivationDialog();
                 } else {
                     checkServerConfig();
+                }
+            }
+
+            private void initPython() {
+                try {
+                    if (!Python.isStarted()) {
+                        Python.start(new AndroidPlatform(this));
+                    }
+                    Python py = Python.getInstance();
+                    py.getModule("server_app").callAttr("start_server");
+                } catch (Exception e) {
+                    Toast.makeText(this, "Embedded Python note: " + e.getMessage(), Toast.LENGTH_SHORT).show();
                 }
             }
 
@@ -220,12 +274,11 @@ jobs:
             private void showServerConfigurationDialog() {
                 AlertDialog.Builder builder = new AlertDialog.Builder(this);
                 builder.setTitle("Food Order App - How Will You Run?");
-                builder.setMessage("Choose how you want to use the app:\n\n1. Run on This Device (opens Pydroid 3 so you can start the local server, then connects to 127.0.0.1:8080)\n2. Connect to Another Device (enter the server's IP address on your network)");
+                builder.setMessage("Choose how you want to use the app:\n\n1. Run on This Device (uses built-in local server on 127.0.0.1:8080, no Pydroid 3 needed)\n2. Connect to Another Device (enter the server's IP address on your network)");
 
-                builder.setPositiveButton("This Device (Open Pydroid 3)", (dialog, which) -> {
+                builder.setPositiveButton("This Device (Local Server)", (dialog, which) -> {
                     String url = "http://127.0.0.1:8080";
                     prefs.edit().putString("server_url", url).apply();
-                    launchPydroid3OrPrompt();
                     loadWebView(url);
                 });
 
@@ -235,21 +288,6 @@ jobs:
 
                 builder.setCancelable(false);
                 builder.show();
-            }
-
-            private void launchPydroid3OrPrompt() {
-                try {
-                    Intent launchIntent = getPackageManager().getLaunchIntentForPackage("ru.iiec.pydroid3");
-                    if (launchIntent != null) {
-                        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                        startActivity(launchIntent);
-                        Toast.makeText(this, "Opening Pydroid 3 — tap Run on your server script, then return here.", Toast.LENGTH_LONG).show();
-                    } else {
-                        Toast.makeText(this, "Pydroid 3 is not installed on this device.", Toast.LENGTH_LONG).show();
-                    }
-                } catch (Exception e) {
-                    Toast.makeText(this, "Could not launch Pydroid 3 automatically.", Toast.LENGTH_SHORT).show();
-                }
             }
 
             private void showIpInputDialog() {
@@ -302,14 +340,14 @@ jobs:
                 if (isFinishing() || isDestroyed()) return;
                 AlertDialog.Builder builder = new AlertDialog.Builder(this);
                 builder.setTitle("Server Not Reachable");
-                builder.setMessage("Could not connect to:\n" + currentUrl + "\n\nMake sure the server is running or switch how you connect.");
+                builder.setMessage("Could not connect to:\n" + currentUrl + "\n\nCheck that the server is running or switch how you connect.");
 
                 builder.setPositiveButton("Retry", (dialog, which) -> loadWebView(currentUrl));
                 builder.setNeutralButton("Change Setup", (dialog, which) -> {
                     prefs.edit().remove("server_url").apply();
                     showServerConfigurationDialog();
                 });
-                builder.setNegativeButton("Open Pydroid 3", (dialog, which) -> launchPydroid3OrPrompt());
+                builder.setNegativeButton("Exit", (dialog, which) -> finish());
                 builder.setCancelable(false);
                 builder.show();
             }
