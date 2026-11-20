@@ -2,7 +2,7 @@ name: Native Android Build
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ Commercial ]
   workflow_dispatch:
 
 jobs:
