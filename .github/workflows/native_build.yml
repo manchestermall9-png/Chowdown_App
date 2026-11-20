@@ -30,7 +30,7 @@ jobs:
       with:
         gradle-version: '8.5'
 
-    - name: Generate Project Structure & Copy v9.10 Files
+    - name: Generate Project Structure & Copy v8.7 Files
       run: |
         mkdir -p app/src/main/java/org/chowdown/pos
         mkdir -p app/src/main/res/values
@@ -39,6 +39,7 @@ jobs:
         cp -f *.html app/src/main/assets/ 2>/dev/null || true
         cp -f *.json app/src/main/assets/ 2>/dev/null || true
         cp -f *.txt app/src/main/assets/ 2>/dev/null || true
+        cp -f v8.7.py app/src/main/assets/main.py 2>/dev/null || true
 
         cat << 'EOF' > gradle.properties
         android.useAndroidX=true
@@ -46,7 +47,7 @@ jobs:
         EOF
 
         cat << 'EOF' > settings.gradle
-        rootProject.name = "FoodOrderApp"
+        rootProject.name = "ChowDownPOS"
         include ':app'
         EOF
 
@@ -79,8 +80,8 @@ jobs:
                 applicationId "org.chowdown.pos"
                 minSdk 21
                 targetSdk 34
-                versionCode 910
-                versionName "9.10"
+                versionCode 870
+                versionName "8.7"
             }
             buildTypes {
                 debug {
@@ -104,7 +105,7 @@ jobs:
             <uses-permission android:name="android.permission.INTERNET" />
             <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
             <application
-                android:label="Food Order App"
+                android:label="Chow Down POS"
                 android:usesCleartextTraffic="true"
                 android:theme="@style/Theme.AppCompat.NoActionBar">
                 <activity
@@ -125,87 +126,24 @@ jobs:
         import android.app.AlertDialog;
         import android.content.SharedPreferences;
         import android.os.Bundle;
-        import android.provider.Settings;
         import android.text.InputType;
         import android.webkit.WebSettings;
         import android.webkit.WebView;
         import android.webkit.WebViewClient;
         import android.widget.EditText;
-        import android.widget.LinearLayout;
-        import android.widget.TextView;
         import androidx.appcompat.app.AppCompatActivity;
 
         public class MainActivity extends AppCompatActivity {
             private WebView webView;
             private SharedPreferences prefs;
-            private String androidId;
 
             @Override
             protected void onCreate(Bundle savedInstanceState) {
                 super.onCreate(savedInstanceState);
 
-                prefs = getSharedPreferences("FoodOrderPrefs", MODE_PRIVATE);
-                androidId = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
-                if (androidId == null) {
-                    androidId = "UNKNOWN_DEVICE";
-                }
-
-                boolean isLicensed = prefs.getBoolean("is_licensed", false);
-
-                if (!isLicensed) {
-                    showActivationDialog();
-                } else {
-                    checkServerConfig();
-                }
-            }
-
-            private void showActivationDialog() {
-                AlertDialog.Builder builder = new AlertDialog.Builder(this);
-                builder.setTitle("Food Order App - Activation Required");
-
-                LinearLayout layout = new LinearLayout(this);
-                layout.setOrientation(LinearLayout.VERTICAL);
-                layout.setPadding(50, 40, 50, 10);
-
-                TextView tvInfo = new TextView(this);
-                tvInfo.setText("Please provide this Device ID to activate your license:\n\n" + androidId);
-                tvInfo.setTextIsSelectable(true);
-                layout.addView(tvInfo);
-
-                final EditText input = new EditText(this);
-                input.setInputType(InputType.TYPE_CLASS_TEXT);
-                input.setHint("Enter Activation Key");
-                layout.addView(input);
-
-                builder.setView(layout);
-
-                builder.setPositiveButton("Activate", (dialog, which) -> {
-                    String key = input.getText().toString().trim();
-                    if (isValidKey(androidId, key)) {
-                        prefs.edit().putBoolean("is_licensed", true).apply();
-                        checkServerConfig();
-                    } else {
-                        new AlertDialog.Builder(this)
-                            .setTitle("Invalid Key")
-                            .setMessage("The activation key entered is incorrect. Please try again.")
-                            .setPositiveButton("OK", (d, w) -> showActivationDialog())
-                            .setCancelable(false)
-                            .show();
-                    }
-                });
-
-                builder.setNegativeButton("Exit", (dialog, which) -> finish());
-                builder.setCancelable(false);
-                builder.show();
-            }
-
-            private boolean isValidKey(String deviceId, String key) {
-                String expectedKey = "FOA-" + Math.abs(deviceId.hashCode());
-                return key.equals(expectedKey) || key.equals("FOODORDER2026");
-            }
-
-            private void checkServerConfig() {
+                prefs = getSharedPreferences("ChowDownV87Prefs", MODE_PRIVATE);
                 String savedUrl = prefs.getString("server_url", null);
+
                 if (savedUrl == null) {
                     showServerConfigurationDialog();
                 } else {
@@ -215,7 +153,7 @@ jobs:
 
             private void showServerConfigurationDialog() {
                 AlertDialog.Builder builder = new AlertDialog.Builder(this);
-                builder.setTitle("Food Order App - Server Setup");
+                builder.setTitle("Chow Down POS v8.7 - Server Setup");
                 builder.setMessage("Where is the backend server located?");
 
                 builder.setPositiveButton("This Device is the Server", (dialog, which) -> {
@@ -273,11 +211,11 @@ jobs:
         }
         EOF
 
-    - name: Build Installable v9.10 APK
+    - name: Build Installable v8.7 APK
       run: gradle assembleDebug --no-daemon
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: FoodOrderApp_v9.10_APK
+        name: ChowDownPOS_v8.7_APK
         path: app/build/outputs/apk/debug/*.apk
