@@ -154,9 +154,14 @@ jobs:
 
         _server_started = False
         _server_lock = threading.Lock()
+        _last_status = "Starting..."
 
 
-        def _is_port_open(host="127.0.0.1", port=8080, timeout=0.3):
+        def get_status():
+            return _last_status
+
+
+        def is_port_open(host="127.0.0.1", port=8080, timeout=0.3):
             try:
                 with socket.create_connection((host, port), timeout=timeout):
                     return True
@@ -164,7 +169,7 @@ jobs:
                 return False
 
 
-        def _prepare_writable_dir(mod):
+        def _pick_writable_dir():
             candidates = [
                 os.environ.get("HOME"),
                 tempfile.gettempdir(),
@@ -176,51 +181,67 @@ jobs:
                 try:
                     data_dir = os.path.join(path, "chowdown_pos_data")
                     os.makedirs(data_dir, exist_ok=True)
-                    test_file = os.path.join(data_dir, ".write_test")
-                    with open(test_file, "w", encoding="utf-8") as f:
+                    probe = os.path.join(data_dir, ".write_test")
+                    with open(probe, "w", encoding="utf-8") as f:
                         f.write("ok")
-                    os.remove(test_file)
+                    os.remove(probe)
                     os.chdir(data_dir)
-                    if hasattr(mod, "DIR"):
-                        mod.DIR = data_dir
-                        for attr, fname in (
-                            ("F_ORD", "orders.json"),
-                            ("F_STK", "stock.json"),
-                            ("F_MEN", "menu.json"),
-                            ("F_CAT", "categories.json"),
-                            ("F_CNT", "counter.json"),
-                            ("F_PHN", "phone_numbers.txt"),
-                            ("F_SALES", "daily_sales.json"),
-                        ):
-                            if hasattr(mod, attr):
-                                setattr(mod, attr, os.path.join(data_dir, fname))
-                    return
+                    return data_dir
                 except OSError:
                     continue
+            return os.path.dirname(os.path.abspath(__file__))
+
+
+        def _apply_writable_dir(mod, data_dir):
+            if hasattr(mod, "DIR"):
+                mod.DIR = data_dir
+                for attr, fname in (
+                    ("F_ORD", "orders.json"),
+                    ("F_STK", "stock.json"),
+                    ("F_MEN", "menu.json"),
+                    ("F_CAT", "categories.json"),
+                    ("F_CNT", "counter.json"),
+                    ("F_PHN", "phone_numbers.txt"),
+                    ("F_SALES", "daily_sales.json"),
+                ):
+                    if hasattr(mod, attr):
+                        setattr(mod, attr, os.path.join(data_dir, fname))
 
 
         def _run_v910_server():
+            global _last_status
             try:
+                data_dir = _pick_writable_dir()
                 mod = importlib.import_module("v9.10")
-                _prepare_writable_dir(mod)
-                port = getattr(mod, "PORT", 8080)
+                _apply_writable_dir(mod, data_dir)
+                port = int(getattr(mod, "PORT", 8080))
                 handler = getattr(mod, "Handler", None)
                 server_cls = getattr(mod, "ThreadingHTTPServer", None)
-                if handler is not None and server_cls is not None and not _is_port_open("127.0.0.1", port):
-                    server_cls(("0.0.0.0", port), handler).serve_forever()
+
+                if handler is None or server_cls is None:
+                    _last_status = "Missing Handler or ThreadingHTTPServer in v9.10"
+                    return
+
+                if is_port_open("127.0.0.1", port):
+                    _last_status = f"Port {port} already listening"
+                    return
+
+                _last_status = f"Listening on 0.0.0.0:{port}"
+                server_cls(("0.0.0.0", port), handler).serve_forever()
             except Exception as exc:
-                print(f"v9.10 server startup error: {exc}")
+                _last_status = f"v9.10 error: {exc}"
 
 
         def start_server():
-            global _server_started
+            global _server_started, _last_status
             with _server_lock:
                 if _server_started:
-                    return "Server already running"
+                    return _last_status
                 _server_started = True
+                _last_status = "Launching v9.10 thread..."
                 thread = threading.Thread(target=_run_v910_server, daemon=True)
                 thread.start()
-            return "v9.10 server thread started"
+            return _last_status
         EOF
 
         cat << 'EOF' > app/src/main/java/org/chowdown/pos/MainActivity.java
