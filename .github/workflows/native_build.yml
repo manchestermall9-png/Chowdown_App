@@ -145,7 +145,8 @@ jobs:
         </manifest>
         EOF
 
-        cat << 'EOF' > app/src/main/python/server_app.py
+        
+cat << 'EOF' > app/src/main/python/server_app.py
         import importlib.util
         import os
         import socket
@@ -275,7 +276,6 @@ jobs:
                 thread.start()
             return _last_status
         EOF
-
         cat << 'EOF' > app/src/main/java/org/chowdown/pos/MainActivity.java
         package org.chowdown.pos;
 
