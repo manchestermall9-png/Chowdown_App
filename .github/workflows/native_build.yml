@@ -124,6 +124,8 @@ jobs:
         }
         EOF
 
+        
+
         cat << 'EOF' > app/src/main/AndroidManifest.xml
         <?xml version="1.0" encoding="utf-8"?>
         <manifest xmlns:android="http://schemas.android.com/res/android">
@@ -144,8 +146,6 @@ jobs:
             </application>
         </manifest>
         EOF
-
-        
         cat << 'EOF' > app/src/main/python/server_app.py
         import importlib.util
         import os
