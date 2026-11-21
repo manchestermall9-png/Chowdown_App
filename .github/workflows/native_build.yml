@@ -30,7 +30,7 @@ jobs:
       with:
         gradle-version: '8.5'
 
-    - name: Generate Project Structure & Copy v9.10 Files
+    - name: Generate Project Structure & Copy Server Files
       run: |
         mkdir -p app/src/main/java/org/chowdown/pos
         mkdir -p app/src/main/python
@@ -126,7 +126,7 @@ jobs:
 
         cat << 'EOF' > app/src/main/AndroidManifest.xml
         <?xml version="1.0" encoding="utf-8"?>
-        <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+        <manifest xmlns:android="http://schemas.android.com/res/android">
             <uses-permission android:name="android.permission.INTERNET" />
             <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
             <application
@@ -146,7 +146,7 @@ jobs:
         EOF
 
         cat << 'EOF' > app/src/main/python/server_app.py
-        import importlib
+        import importlib.util
         import os
         import socket
         import tempfile
@@ -208,28 +208,60 @@ jobs:
                         setattr(mod, attr, os.path.join(data_dir, fname))
 
 
-        def _run_v910_server():
+        def _find_server_script(py_dir):
+            preferred = ["v9.10.py", "main.py", "server.py"]
+            for name in preferred:
+                candidate = os.path.join(py_dir, name)
+                if os.path.isfile(candidate):
+                    return candidate
+            try:
+                py_files = sorted(
+                    f for f in os.listdir(py_dir)
+                    if f.endswith(".py") and f != "server_app.py"
+                )
+                if py_files:
+                    return os.path.join(py_dir, py_files[0])
+            except OSError:
+                pass
+            return None
+
+
+        def _load_server_module():
+            py_dir = os.path.dirname(os.path.abspath(__file__))
+            script_path = _find_server_script(py_dir)
+            if not script_path:
+                raise FileNotFoundError(f"No server .py file found in {py_dir}")
+            mod_name = os.path.splitext(os.path.basename(script_path))[0].replace(".", "_")
+            spec = importlib.util.spec_from_file_location(mod_name, script_path)
+            if spec is None or spec.loader is None:
+                raise ImportError(f"Could not create module spec for {script_path}")
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod, os.path.basename(script_path)
+
+
+        def _run_server():
             global _last_status
             try:
                 data_dir = _pick_writable_dir()
-                mod = importlib.import_module("v9.10")
+                mod, script_name = _load_server_module()
                 _apply_writable_dir(mod, data_dir)
                 port = int(getattr(mod, "PORT", 8080))
                 handler = getattr(mod, "Handler", None)
                 server_cls = getattr(mod, "ThreadingHTTPServer", None)
 
                 if handler is None or server_cls is None:
-                    _last_status = "Missing Handler or ThreadingHTTPServer in v9.10"
+                    _last_status = f"Missing Handler or ThreadingHTTPServer in {script_name}"
                     return
 
                 if is_port_open("127.0.0.1", port):
-                    _last_status = f"Port {port} already listening"
+                    _last_status = f"Port {port} already listening ({script_name})"
                     return
 
-                _last_status = f"Listening on 0.0.0.0:{port}"
+                _last_status = f"Listening on 0.0.0.0:{port} ({script_name})"
                 server_cls(("0.0.0.0", port), handler).serve_forever()
             except Exception as exc:
-                _last_status = f"v9.10 error: {exc}"
+                _last_status = f"Server error: {exc}"
 
 
         def start_server():
@@ -238,8 +270,8 @@ jobs:
                 if _server_started:
                     return _last_status
                 _server_started = True
-                _last_status = "Launching v9.10 thread..."
-                thread = threading.Thread(target=_run_v910_server, daemon=True)
+                _last_status = "Launching server thread..."
+                thread = threading.Thread(target=_run_server, daemon=True)
                 thread.start()
             return _last_status
         EOF
@@ -466,7 +498,7 @@ jobs:
         }
         EOF
 
-    - name: Build Installable v9.10 APK
+    - name: Build Installable APK
       run: gradle assembleDebug --no-daemon
 
     - name: Upload APK Artifact
