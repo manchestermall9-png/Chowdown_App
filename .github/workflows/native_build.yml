@@ -40,8 +40,7 @@ jobs:
         cp -f *.html app/src/main/assets/ 2>/dev/null || true
         cp -f *.json app/src/main/assets/ 2>/dev/null || true
         cp -f *.txt app/src/main/assets/ 2>/dev/null || true
-        cp -f v9.10.py app/src/main/python/server_app.py 2>/dev/null || true
-        cp -f app.py app/src/main/python/server_app.py 2>/dev/null || true
+        cp -f *.py app/src/main/python/ 2>/dev/null || true
 
         cat << 'EOF' > gradle.properties
         android.useAndroidX=true
@@ -147,15 +146,81 @@ jobs:
         EOF
 
         cat << 'EOF' > app/src/main/python/server_app.py
+        import importlib
         import os
+        import socket
+        import tempfile
+        import threading
+
+        _server_started = False
+        _server_lock = threading.Lock()
+
+
+        def _is_port_open(host="127.0.0.1", port=8080, timeout=0.3):
+            try:
+                with socket.create_connection((host, port), timeout=timeout):
+                    return True
+            except OSError:
+                return False
+
+
+        def _prepare_writable_dir(mod):
+            candidates = [
+                os.environ.get("HOME"),
+                tempfile.gettempdir(),
+                os.path.dirname(os.path.abspath(__file__)),
+            ]
+            for path in candidates:
+                if not path:
+                    continue
+                try:
+                    data_dir = os.path.join(path, "chowdown_pos_data")
+                    os.makedirs(data_dir, exist_ok=True)
+                    test_file = os.path.join(data_dir, ".write_test")
+                    with open(test_file, "w", encoding="utf-8") as f:
+                        f.write("ok")
+                    os.remove(test_file)
+                    os.chdir(data_dir)
+                    if hasattr(mod, "DIR"):
+                        mod.DIR = data_dir
+                        for attr, fname in (
+                            ("F_ORD", "orders.json"),
+                            ("F_STK", "stock.json"),
+                            ("F_MEN", "menu.json"),
+                            ("F_CAT", "categories.json"),
+                            ("F_CNT", "counter.json"),
+                            ("F_PHN", "phone_numbers.txt"),
+                            ("F_SALES", "daily_sales.json"),
+                        ):
+                            if hasattr(mod, attr):
+                                setattr(mod, attr, os.path.join(data_dir, fname))
+                    return
+                except OSError:
+                    continue
+
+
+        def _run_v910_server():
+            try:
+                mod = importlib.import_module("v9.10")
+                _prepare_writable_dir(mod)
+                port = getattr(mod, "PORT", 8080)
+                handler = getattr(mod, "Handler", None)
+                server_cls = getattr(mod, "ThreadingHTTPServer", None)
+                if handler is not None and server_cls is not None and not _is_port_open("127.0.0.1", port):
+                    server_cls(("0.0.0.0", port), handler).serve_forever()
+            except Exception as exc:
+                print(f"v9.10 server startup error: {exc}")
+
 
         def start_server():
-            try:
-                # If your Python script defines a start() or run() function, call it here.
-                # Example: if you have a function named main() or start(), import and call it.
-                return "Python runtime ready"
-            except Exception as exc:
-                return str(exc)
+            global _server_started
+            with _server_lock:
+                if _server_started:
+                    return "Server already running"
+                _server_started = True
+                thread = threading.Thread(target=_run_v910_server, daemon=True)
+                thread.start()
+            return "v9.10 server thread started"
         EOF
 
         cat << 'EOF' > app/src/main/java/org/chowdown/pos/MainActivity.java
@@ -164,6 +229,8 @@ jobs:
         import android.app.AlertDialog;
         import android.content.SharedPreferences;
         import android.os.Bundle;
+        import android.os.Handler;
+        import android.os.Looper;
         import android.provider.Settings;
         import android.text.InputType;
         import android.webkit.WebResourceError;
@@ -183,6 +250,7 @@ jobs:
             private WebView webView;
             private SharedPreferences prefs;
             private String androidId;
+            private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
             @Override
             protected void onCreate(Bundle savedInstanceState) {
@@ -333,7 +401,15 @@ jobs:
                         }
                     }
                 });
-                webView.loadUrl(url);
+                if ("http://127.0.0.1:8080".equals(url)) {
+                    mainHandler.postDelayed(() -> {
+                        if (!isFinishing() && !isDestroyed() && webView != null) {
+                            webView.loadUrl(url);
+                        }
+                    }, 900);
+                } else {
+                    webView.loadUrl(url);
+                }
             }
 
             private void showConnectionFailedDialog(String currentUrl) {
