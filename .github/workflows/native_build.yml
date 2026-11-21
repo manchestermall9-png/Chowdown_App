@@ -306,6 +306,20 @@ jobs:
                 }
             }
 
+            private String getPythonStatus() {
+                try {
+                    if (Python.isStarted()) {
+                        Object status = Python.getInstance().getModule("server_app").callAttr("get_status");
+                        if (status != null) {
+                            return status.toString();
+                        }
+                    }
+                } catch (Exception e) {
+                    return "Status check error: " + e.getMessage();
+                }
+                return "Python not started";
+            }
+
             private void showActivationDialog() {
                 AlertDialog.Builder builder = new AlertDialog.Builder(this);
                 builder.setTitle("Food Order App - Activation Required");
@@ -427,7 +441,7 @@ jobs:
                         if (!isFinishing() && !isDestroyed() && webView != null) {
                             webView.loadUrl(url);
                         }
-                    }, 900);
+                    }, 2000);
                 } else {
                     webView.loadUrl(url);
                 }
@@ -435,9 +449,10 @@ jobs:
 
             private void showConnectionFailedDialog(String currentUrl) {
                 if (isFinishing() || isDestroyed()) return;
+                String pyStatus = getPythonStatus();
                 AlertDialog.Builder builder = new AlertDialog.Builder(this);
                 builder.setTitle("Server Not Reachable");
-                builder.setMessage("Could not connect to:\n" + currentUrl + "\n\nCheck that the server is running or switch how you connect.");
+                builder.setMessage("Could not connect to:\n" + currentUrl + "\n\nStatus: " + pyStatus + "\n\nCheck that the server is running or switch how you connect.");
 
                 builder.setPositiveButton("Retry", (dialog, which) -> loadWebView(currentUrl));
                 builder.setNeutralButton("Change Setup", (dialog, which) -> {
