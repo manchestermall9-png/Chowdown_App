@@ -33,16 +33,18 @@ jobs:
     - name: Generate Project Structure & Copy v9.11.02 Files
       run: |
         mkdir -p app/src/main/java/org/chowdown/pos
+        mkdir -p app/src/main/python
         mkdir -p app/src/main/res/values
         mkdir -p app/src/main/assets
 
         cp -f *.html app/src/main/assets/ 2>/dev/null || true
         cp -f *.json app/src/main/assets/ 2>/dev/null || true
         cp -f *.txt app/src/main/assets/ 2>/dev/null || true
+
         if [ -f v9.10.py ]; then
-          cp -f v9.10.py app/src/main/assets/main.py
+          cp -f v9.10.py app/src/main/python/pos_server.py
         elif [ -f v8.7.py ]; then
-          cp -f v8.7.py app/src/main/assets/main.py
+          cp -f v8.7.py app/src/main/python/pos_server.py
         fi
 
         cat << 'EOF' > gradle.properties
@@ -51,6 +53,20 @@ jobs:
         EOF
 
         cat << 'EOF' > settings.gradle
+        pluginManagement {
+            repositories {
+                google()
+                mavenCentral()
+                gradlePluginPortal()
+            }
+        }
+        dependencyResolutionManagement {
+            repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
+            repositories {
+                google()
+                mavenCentral()
+            }
+        }
         rootProject.name = "ChowDownPOS"
         include ':app'
         EOF
@@ -63,6 +79,7 @@ jobs:
             }
             dependencies {
                 classpath 'com.android.tools.build:gradle:8.2.2'
+                classpath 'com.chaquo.python:gradle:17.2.0'
             }
         }
         allprojects {
@@ -75,6 +92,7 @@ jobs:
 
         cat << 'EOF' > app/build.gradle
         apply plugin: 'com.android.application'
+        apply plugin: 'com.chaquo.python'
 
         android {
             namespace 'org.chowdown.pos'
@@ -82,10 +100,14 @@ jobs:
 
             defaultConfig {
                 applicationId "org.chowdown.pos"
-                minSdk 21
+                minSdk 24
                 targetSdk 34
                 versionCode 91102
                 versionName "9.11.02"
+
+                ndk {
+                    abiFilters "arm64-v8a", "x86_64"
+                }
             }
             buildTypes {
                 debug {
@@ -95,6 +117,12 @@ jobs:
                     minifyEnabled true
                     proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
                 }
+            }
+        }
+
+        chaquopy {
+            defaultConfig {
+                version = "3.10"
             }
         }
 
@@ -165,6 +193,11 @@ jobs:
         import androidx.appcompat.app.AppCompatActivity;
         import androidx.core.content.ContextCompat;
 
+        import com.chaquo.python.PyException;
+        import com.chaquo.python.PyObject;
+        import com.chaquo.python.Python;
+        import com.chaquo.python.android.AndroidPlatform;
+
         import org.json.JSONArray;
         import org.json.JSONObject;
 
@@ -192,6 +225,8 @@ jobs:
             private static final int LINE_WIDTH_58MM = 32;
 
             private final ExecutorService printExecutor = Executors.newSingleThreadExecutor();
+            private final ExecutorService pythonExecutor = Executors.newSingleThreadExecutor();
+            private volatile boolean pythonStarted = false;
             private WebView webView;
             private String pendingReceiptJson = null;
 
@@ -278,7 +313,51 @@ jobs:
                 }
 
                 setContentView(webView);
-                webView.loadUrl("http://127.0.0.1:8080");
+                startPythonAndLoadUrl("http://127.0.0.1:8080");
+            }
+
+            private void startPythonAndLoadUrl(String targetUrl) {
+                if (pythonStarted && Python.isStarted()) {
+                    webView.loadUrl(targetUrl);
+                    return;
+                }
+
+                pythonExecutor.execute(() -> {
+                    try {
+                        if (!Python.isStarted()) {
+                            Python.start(new AndroidPlatform(getApplicationContext()));
+                        }
+
+                        if (!pythonStarted) {
+                            Python py = Python.getInstance();
+                            PyObject module = py.getModule("pos_server");
+                            if (module.containsKey("start_server")) {
+                                module.callAttr("start_server");
+                            } else if (module.containsKey("main")) {
+                                module.callAttr("main");
+                            }
+                            pythonStarted = true;
+                        }
+
+                        Thread.sleep(500);
+                    } catch (PyException pyEx) {
+                        final String err = pyEx.getMessage() != null ? pyEx.getMessage() : "Python error";
+                        runOnUiThread(() ->
+                                Toast.makeText(MainActivity.this, "Python startup error: " + err, Toast.LENGTH_LONG).show()
+                        );
+                    } catch (Exception ex) {
+                        final String err = ex.getMessage() != null ? ex.getMessage() : "Failed to start Python";
+                        runOnUiThread(() ->
+                                Toast.makeText(MainActivity.this, "Startup error: " + err, Toast.LENGTH_LONG).show()
+                        );
+                    }
+
+                    runOnUiThread(() -> {
+                        if (!isFinishing() && !isDestroyed() && webView != null) {
+                            webView.loadUrl(targetUrl);
+                        }
+                    });
+                });
             }
 
             public class PrinterBridge {
@@ -559,6 +638,7 @@ jobs:
             protected void onDestroy() {
                 super.onDestroy();
                 printExecutor.shutdownNow();
+                pythonExecutor.shutdownNow();
             }
 
             public static class LicenseManager {
