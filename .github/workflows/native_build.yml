@@ -150,8 +150,10 @@ jobs:
         PY
 
         cat << 'EOF' > app/src/main/python/server_app.py
+        import importlib
         import importlib.util
         import os
+        import pkgutil
         import socket
         import tempfile
         import threading
@@ -234,7 +236,7 @@ jobs:
             for mod_name in ("v9.10", "main", "server"):
                 try:
                     spec = importlib.util.find_spec(mod_name)
-                    if spec is not None and spec.origin:
+                    if spec is not None and spec.origin and os.path.isfile(spec.origin):
                         return spec.origin
                 except Exception:
                     pass
@@ -244,15 +246,31 @@ jobs:
         def _load_server_module():
             py_dir = os.path.dirname(os.path.abspath(__file__))
             script_path = _find_server_script(py_dir)
-            if not script_path:
-                raise FileNotFoundError(f"No server .py file found in {py_dir}")
-            mod_name = os.path.splitext(os.path.basename(script_path))[0].replace(".", "_")
-            spec = importlib.util.spec_from_file_location(mod_name, script_path)
-            if spec is None or spec.loader is None:
-                raise ImportError(f"Could not create module spec for {script_path}")
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            return mod, os.path.basename(script_path)
+            if script_path:
+                mod_name = os.path.splitext(os.path.basename(script_path))[0].replace(".", "_")
+                spec = importlib.util.spec_from_file_location(mod_name, script_path)
+                if spec is not None and spec.loader is not None:
+                    mod = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(mod)
+                    return mod, os.path.basename(script_path)
+
+            candidate_mods = ["v9.10", "main", "server"]
+            try:
+                for _, name, _ in pkgutil.iter_modules([py_dir]):
+                    if name != "server_app" and name not in candidate_mods:
+                        candidate_mods.append(name)
+            except Exception:
+                pass
+
+            for mod_name in candidate_mods:
+                try:
+                    mod = importlib.import_module(mod_name)
+                    if hasattr(mod, "Handler") and hasattr(mod, "ThreadingHTTPServer"):
+                        return mod, f"{mod_name}.py"
+                except Exception:
+                    continue
+
+            raise FileNotFoundError(f"No server .py file found in {py_dir}")
 
 
         def _run_server():
