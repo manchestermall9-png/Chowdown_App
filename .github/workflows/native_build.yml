@@ -82,7 +82,7 @@ jobs:
             }
             dependencies {
                 classpath 'com.android.tools.build:gradle:8.2.2'
-                classpath 'com.chaquo.python:gradle:15.0.1'
+                classpath 'com.chaquo.python:gradle:17.2.0'
             }
         }
         allprojects {
