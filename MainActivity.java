@@ -1,4 +1,3 @@
-cat << 'EOF' > app/src/main/java/org/chowdown/pos/MainActivity.java
 package org.chowdown.pos;
 
 import android.app.AlertDialog;
@@ -309,4 +308,3 @@ public class MainActivity extends AppCompatActivity {
         builder.show();
     }
 }
-EOF
