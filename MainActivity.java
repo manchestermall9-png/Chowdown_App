@@ -132,9 +132,10 @@ public class MainActivity extends AppCompatActivity {
                 prefs.edit().putBoolean("is_licensed", true).apply();
                 checkServerConfig();
             } else {
+                String expectedDebug = computeExpectedKey(androidId, key);
                 new AlertDialog.Builder(this)
                     .setTitle("Invalid Key")
-                    .setMessage("The activation key entered is incorrect. Please try again.")
+                    .setMessage("The activation key entered is incorrect. Please try again.\n\nDevice ID: " + androidId + "\nExpected: " + expectedDebug)
                     .setPositiveButton("OK", (d, w) -> showActivationDialog())
                     .setCancelable(false)
                     .show();
@@ -144,6 +145,32 @@ public class MainActivity extends AppCompatActivity {
         builder.setNegativeButton("Exit", (dialog, which) -> finish());
         builder.setCancelable(false);
         builder.show();
+    }
+
+    private String computeExpectedKey(String deviceId, String enteredKey) {
+        if (deviceId == null || enteredKey == null) {
+            return "N/A";
+        }
+        String cleanId = deviceId.trim();
+        String cleanKey = enteredKey.trim().toUpperCase(Locale.US);
+        String[] parts = cleanKey.split("-");
+        if (parts.length != 2 || parts[0].length() != 8) {
+            return "Format must be YYYYMMDD-XXXXXXXXXXXX";
+        }
+        String compactDate = parts[0];
+        try {
+            String payload = cleanId + ":" + compactDate;
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hashBytes = md.digest(payload.getBytes(StandardCharsets.UTF_8));
+
+            StringBuilder hex = new StringBuilder();
+            for (byte b : hashBytes) {
+                hex.append(String.format(Locale.US, "%02X", b));
+            }
+            return compactDate + "-" + hex.toString().substring(0, 12);
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
     }
 
     private boolean isValidKey(String deviceId, String key) {
@@ -176,17 +203,8 @@ public class MainActivity extends AppCompatActivity {
                 return false;
             }
 
-            String payload = cleanId + ":" + compactDate;
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] hashBytes = md.digest(payload.getBytes(StandardCharsets.UTF_8));
-
-            StringBuilder hex = new StringBuilder();
-            for (byte b : hashBytes) {
-                hex.append(String.format(Locale.US, "%02X", b));
-            }
-
-            String expectedDigest = hex.toString().substring(0, 12);
-            return providedDigest.equals(expectedDigest);
+            String expectedKey = computeExpectedKey(cleanId, cleanKey);
+            return cleanKey.equals(expectedKey);
         } catch (Exception e) {
             return false;
         }
