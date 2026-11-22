@@ -1,260 +1,294 @@
-package Food.Order.App;
+cat << 'EOF' > app/src/main/java/org/chowdown/pos/MainActivity.java
+package org.chowdown.pos;
 
 import android.app.AlertDialog;
-import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.text.InputType;
+import android.view.Gravity;
+import android.webkit.WebResourceError;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
-
 import androidx.appcompat.app.AppCompatActivity;
-
+import com.chaquo.python.Python;
+import com.chaquo.python.android.AndroidPlatform;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
-
 public class MainActivity extends AppCompatActivity {
+    private WebView webView;
+    private SharedPreferences prefs;
+    private String androidId;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        if (LicenseManager.isLicenseActive(this)) {
-            startPosApp();
-        } else {
+        prefs = getSharedPreferences("FoodOrderPrefs", MODE_PRIVATE);
+        boolean hasShownInstalledMessage = prefs.getBoolean("has_shown_installed_message", false);
+        if (!hasShownInstalledMessage) {
+            Toast.makeText(this, "App installed!", Toast.LENGTH_LONG).show();
+            prefs.edit().putBoolean("has_shown_installed_message", true).apply();
+        }
+
+        showStartupProgress("Preparing app & starting local server...");
+        initPython();
+
+        androidId = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
+        if (androidId == null) {
+            androidId = "UNKNOWN_DEVICE";
+        }
+
+        boolean isLicensed = prefs.getBoolean("is_licensed", false);
+
+        if (!isLicensed) {
             showActivationDialog();
+        } else {
+            checkServerConfig();
         }
     }
 
+    private void showStartupProgress(String message) {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setGravity(Gravity.CENTER);
+        layout.setPadding(60, 60, 60, 60);
+
+        ProgressBar spinner = new ProgressBar(this);
+        layout.addView(spinner);
+
+        TextView tvStatus = new TextView(this);
+        tvStatus.setText(message);
+        tvStatus.setGravity(Gravity.CENTER);
+        tvStatus.setPadding(0, 30, 0, 0);
+        layout.addView(tvStatus);
+
+        setContentView(layout);
+    }
+
+    private void initPython() {
+        try {
+            if (!Python.isStarted()) {
+                Python.start(new AndroidPlatform(this));
+            }
+            Python py = Python.getInstance();
+            py.getModule("server_app").callAttr("start_server");
+        } catch (Exception e) {
+            Toast.makeText(this, "Embedded Python note: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private String getPythonStatus() {
+        try {
+            if (Python.isStarted()) {
+                Object status = Python.getInstance().getModule("server_app").callAttr("get_status");
+                if (status != null) {
+                    return status.toString();
+                }
+            }
+        } catch (Exception e) {
+            return "Status check error: " + e.getMessage();
+        }
+        return "Python not started";
+    }
+
     private void showActivationDialog() {
-        String deviceId = LicenseManager.getDeviceId(this);
-
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle("App Activation Required");
-        builder.setCancelable(false);
+        builder.setTitle("Food Order App - Activation Required");
 
-        LinearLayout container = new LinearLayout(this);
-        container.setOrientation(LinearLayout.VERTICAL);
-        int pad = (int) (18 * getResources().getDisplayMetrics().density);
-        container.setPadding(pad, pad, pad, pad);
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(50, 40, 50, 10);
 
-        TextView idLabel = new TextView(this);
-        idLabel.setText("Device ID:\n" + deviceId);
-        idLabel.setTextIsSelectable(true);
-        idLabel.setPadding(0, 0, 0, pad / 2);
-        container.addView(idLabel);
+        TextView tvInfo = new TextView(this);
+        tvInfo.setText("Please provide this Device ID to activate your license:\n\n" + androidId);
+        tvInfo.setTextIsSelectable(true);
+        layout.addView(tvInfo);
 
-        final EditText keyInput = new EditText(this);
-        keyInput.setHint("Enter license key (YYYYMMDD-XXXXXXXXXXXX)");
-        keyInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
-        container.addView(keyInput);
+        final EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT);
+        input.setHint("Enter Activation Key");
+        layout.addView(input);
 
-        builder.setView(container);
+        builder.setView(layout);
 
         builder.setPositiveButton("Activate", (dialog, which) -> {
-            String enteredKey = keyInput.getText().toString().trim();
-            LicenseManager.ValidationResult result = LicenseManager.activateKey(this, enteredKey);
-            Toast.makeText(this, result.message, Toast.LENGTH_LONG).show();
-
-            if (result.valid) {
-                startPosApp();
+            String key = input.getText().toString().trim();
+            if (isValidKey(androidId, key)) {
+                prefs.edit().putBoolean("is_licensed", true).apply();
+                checkServerConfig();
             } else {
-                showActivationDialog();
+                new AlertDialog.Builder(this)
+                    .setTitle("Invalid Key")
+                    .setMessage("The activation key entered is incorrect. Please try again.")
+                    .setPositiveButton("OK", (d, w) -> showActivationDialog())
+                    .setCancelable(false)
+                    .show();
             }
         });
 
         builder.setNegativeButton("Exit", (dialog, which) -> finish());
-
+        builder.setCancelable(false);
         builder.show();
     }
 
-    private void startPosApp() {
-        // TODO: Put your normal POS startup code here (e.g., setContentView / WebView / server start)
-        TextView tv = new TextView(this);
-        tv.setText("POS Licensed & Active");
-        setContentView(tv);
+    private boolean isValidKey(String deviceId, String key) {
+        if (deviceId == null || key == null) {
+            return false;
+        }
+
+        String cleanId = deviceId.trim();
+        String cleanKey = key.trim().toUpperCase(Locale.US);
+
+        String[] parts = cleanKey.split("-");
+        if (parts.length != 2) {
+            return false;
+        }
+
+        String compactDate = parts[0];
+        String providedDigest = parts[1];
+
+        if (compactDate.length() != 8 || providedDigest.length() != 12) {
+            return false;
+        }
+
+        try {
+            SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd", Locale.US);
+            sdf.setLenient(false);
+            Date expDate = sdf.parse(compactDate);
+            String todayStr = sdf.format(new Date());
+            Date todayDate = sdf.parse(todayStr);
+            if (expDate != null && todayDate != null && expDate.before(todayDate)) {
+                return false;
+            }
+
+            String payload = cleanId + ":" + compactDate;
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hashBytes = md.digest(payload.getBytes(StandardCharsets.UTF_8));
+
+            StringBuilder hex = new StringBuilder();
+            for (byte b : hashBytes) {
+                hex.append(String.format(Locale.US, "%02X", b));
+            }
+
+            String expectedDigest = hex.toString().substring(0, 12);
+            return providedDigest.equals(expectedDigest);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
-    public static class LicenseManager {
-        private static final String SECRET_SALT = "1962_1969_1993_2001_xyxy";
-        private static final String PREFS_NAME = "pos_license_prefs";
-        private static final String KEY_SAVED_LICENSE = "saved_license_key";
-        private static final String KEY_LAST_SEEN_DATE = "last_seen_date_yyyymmdd";
-
-        public static class ValidationResult {
-            public final boolean valid;
-            public final String message;
-
-            public ValidationResult(boolean valid, String message) {
-                this.valid = valid;
-                this.message = message;
-            }
+    private void checkServerConfig() {
+        String savedUrl = prefs.getString("server_url", null);
+        if (savedUrl == null) {
+            showServerConfigurationDialog();
+        } else {
+            loadWebView(savedUrl);
         }
+    }
 
-        public static String getDeviceId(Context context) {
-            String androidId = Settings.Secure.getString(
-                    context.getContentResolver(),
-                    Settings.Secure.ANDROID_ID
-            );
-            return androidId == null ? "unknown_device" : androidId.trim().toLowerCase(Locale.US);
-        }
+    private void showServerConfigurationDialog() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Food Order App - How Will You Run?");
+        builder.setMessage("Choose how you want to use the app:\n\n1. Run on This Device (uses built-in local server on 127.0.0.1:8080, no Pydroid 3 needed)\n2. Connect to Another Device (enter the server's IP address on your network)");
 
-        public static ValidationResult activateKey(Context context, String rawKey) {
-            if (rawKey == null || rawKey.trim().isEmpty()) {
-                return new ValidationResult(false, "Please enter a license key.");
+        builder.setPositiveButton("This Device (Local Server)", (dialog, which) -> {
+            String url = "http://127.0.0.1:8080";
+            prefs.edit().putString("server_url", url).apply();
+            loadWebView(url);
+        });
+
+        builder.setNegativeButton("Another Device (Enter IP)", (dialog, which) -> {
+            showIpInputDialog();
+        });
+
+        builder.setCancelable(false);
+        builder.show();
+    }
+
+    private void showIpInputDialog() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Enter Server IP Address");
+
+        final EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        input.setHint("e.g. 192.168.1.119 or 172.20.10.2");
+        input.setText("192.168.1.119");
+        builder.setView(input);
+
+        builder.setPositiveButton("Connect", (dialog, which) -> {
+            String ip = input.getText().toString().trim();
+            if (ip.isEmpty()) {
+                ip = "192.168.1.119";
             }
+            String url = "http://" + ip + ":8080";
+            prefs.edit().putString("server_url", url).apply();
+            loadWebView(url);
+        });
 
-            String normalizedKey = rawKey.trim().toUpperCase(Locale.US);
-            String[] parts = normalizedKey.split("-");
-            if (parts.length != 2) {
-                return new ValidationResult(false, "Invalid key format.");
-            }
+        builder.setNegativeButton("Back", (dialog, which) -> {
+            showServerConfigurationDialog();
+        });
 
-            String expiryStr = parts[0].trim();
-            String providedSig = parts[1].trim();
+        builder.setCancelable(false);
+        builder.show();
+    }
 
-            if (!expiryStr.matches("\\d{8}") || providedSig.length() != 12) {
-                return new ValidationResult(false, "Invalid key format or length.");
-            }
-
-            Date expiryDate = parseYyyyMmDd(expiryStr);
-            Date todayDate = getTodayDateOnly();
-            String todayStr = formatYyyyMmDd(todayDate);
-
-            if (expiryDate == null) {
-                return new ValidationResult(false, "Invalid expiration date in key.");
-            }
-
-            String expectedSig = computeShortHmac(getDeviceId(context), expiryStr);
-            if (!MessageDigest.isEqual(
-                    expectedSig.getBytes(StandardCharsets.UTF_8),
-                    providedSig.getBytes(StandardCharsets.UTF_8))) {
-                return new ValidationResult(false, "License key does not match this device.");
-            }
-
-            if (todayDate.after(expiryDate)) {
-                return new ValidationResult(false, "This license key has expired.");
-            }
-
-            SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-            String lastSeenStr = prefs.getString(KEY_LAST_SEEN_DATE, null);
-            if (lastSeenStr != null) {
-                Date lastSeenDate = parseYyyyMmDd(lastSeenStr);
-                if (lastSeenDate != null && todayDate.before(lastSeenDate)) {
-                    return new ValidationResult(false, "System clock change detected. Please check device date.");
+    private void loadWebView(String url) {
+        webView = new WebView(this);
+        setContentView(webView);
+        WebSettings webSettings = webView.getSettings();
+        webSettings.setJavaScriptEnabled(true);
+        webSettings.setDomStorageEnabled(true);
+        webSettings.setAllowFileAccess(true);
+        webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                if (request.isForMainFrame()) {
+                    showConnectionFailedDialog(url);
                 }
             }
-
-            String updatedLastSeen = (lastSeenStr == null || todayStr.compareTo(lastSeenStr) > 0)
-                    ? todayStr
-                    : lastSeenStr;
-
-            prefs.edit()
-                    .putString(KEY_SAVED_LICENSE, normalizedKey)
-                    .putString(KEY_LAST_SEEN_DATE, updatedLastSeen)
-                    .apply();
-
-            return new ValidationResult(true, "License activated successfully.");
-        }
-
-        public static boolean isLicenseActive(Context context) {
-            SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-            Date todayDate = getTodayDateOnly();
-            String todayStr = formatYyyyMmDd(todayDate);
-
-            String lastSeenStr = prefs.getString(KEY_LAST_SEEN_DATE, null);
-            if (lastSeenStr != null) {
-                Date lastSeenDate = parseYyyyMmDd(lastSeenStr);
-                if (lastSeenDate != null && todayDate.before(lastSeenDate)) {
-                    return false;
+        });
+        if ("http://127.0.0.1:8080".equals(url)) {
+            mainHandler.postDelayed(() -> {
+                if (!isFinishing() && !isDestroyed() && webView != null) {
+                    webView.loadUrl(url);
                 }
-            }
-
-            String savedKey = prefs.getString(KEY_SAVED_LICENSE, null);
-            if (savedKey == null || savedKey.isEmpty()) {
-                return false;
-            }
-
-            String[] parts = savedKey.split("-");
-            if (parts.length != 2) {
-                return false;
-            }
-
-            String expiryStr = parts[0].trim();
-            String savedSig = parts[1].trim();
-            Date expiryDate = parseYyyyMmDd(expiryStr);
-            if (expiryDate == null || todayDate.after(expiryDate)) {
-                return false;
-            }
-
-            String expectedSig = computeShortHmac(getDeviceId(context), expiryStr);
-            boolean sigMatches = MessageDigest.isEqual(
-                    expectedSig.getBytes(StandardCharsets.UTF_8),
-                    savedSig.getBytes(StandardCharsets.UTF_8)
-            );
-            if (!sigMatches) {
-                return false;
-            }
-
-            if (lastSeenStr == null || todayStr.compareTo(lastSeenStr) > 0) {
-                prefs.edit().putString(KEY_LAST_SEEN_DATE, todayStr).apply();
-            }
-
-            return true;
+            }, 2000);
+        } else {
+            webView.loadUrl(url);
         }
+    }
 
-        private static String computeShortHmac(String deviceId, String expiryStr) {
-            try {
-                String payload = deviceId.trim().toLowerCase(Locale.US) + ":" + expiryStr;
-                Mac mac = Mac.getInstance("HmacSHA256");
-                SecretKeySpec secretKey = new SecretKeySpec(
-                        SECRET_SALT.getBytes(StandardCharsets.UTF_8),
-                        "HmacSHA256"
-                );
-                mac.init(secretKey);
-                byte[] rawHmac = mac.doFinal(payload.getBytes(StandardCharsets.UTF_8));
-                String hex = bytesToHex(rawHmac).toUpperCase(Locale.US);
-                return hex.substring(0, 12);
-            } catch (Exception e) {
-                return "";
-            }
-        }
+    private void showConnectionFailedDialog(String currentUrl) {
+        if (isFinishing() || isDestroyed()) return;
+        String pyStatus = getPythonStatus();
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Server Not Reachable");
+        builder.setMessage("Could not connect to:\n" + currentUrl + "\n\nStatus: " + pyStatus + "\n\nCheck that the server is running or switch how you connect.");
 
-        private static Date getTodayDateOnly() {
-            String todayStr = new SimpleDateFormat("yyyyMMdd", Locale.US).format(new Date());
-            return parseYyyyMmDd(todayStr);
-        }
-
-        private static String formatYyyyMmDd(Date date) {
-            return new SimpleDateFormat("yyyyMMdd", Locale.US).format(date);
-        }
-
-        private static Date parseYyyyMmDd(String yyyymmdd) {
-            try {
-                SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd", Locale.US);
-                sdf.setLenient(false);
-                return sdf.parse(yyyymmdd);
-            } catch (ParseException e) {
-                return null;
-            }
-        }
-
-        private static String bytesToHex(byte[] bytes) {
-            StringBuilder sb = new StringBuilder(bytes.length * 2);
-            for (byte b : bytes) {
-                sb.append(String.format(Locale.US, "%02x", b));
-            }
-            return sb.toString();
-        }
+        builder.setPositiveButton("Retry", (dialog, which) -> loadWebView(currentUrl));
+        builder.setNeutralButton("Change Setup", (dialog, which) -> {
+            prefs.edit().remove("server_url").apply();
+            showServerConfigurationDialog();
+        });
+        builder.setNegativeButton("Exit", (dialog, which) -> finish());
+        builder.setCancelable(false);
+        builder.show();
     }
 }
+EOF
