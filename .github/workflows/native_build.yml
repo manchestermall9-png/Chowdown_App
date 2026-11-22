@@ -126,26 +126,30 @@ jobs:
 
         
 
-        cat << 'EOF' > app/src/main/AndroidManifest.xml
-        <?xml version="1.0" encoding="utf-8"?>
-        <manifest xmlns:android="http://schemas.android.com/res/android">
-            <uses-permission android:name="android.permission.INTERNET" />
-            <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+                python3 - << 'PY'
+        q = chr(34)
+        xml = f"""<?xml version={q}1.0{q} encoding={q}utf-8{q}?>
+        <manifest xmlns:android={q}http://schemas.android.com/apk/res/android{q}>
+            <uses-permission android:name={q}android.permission.INTERNET{q} />
+            <uses-permission android:name={q}android.permission.ACCESS_NETWORK_STATE{q} />
             <application
-                android:label="Food Order App"
-                android:usesCleartextTraffic="true"
-                android:theme="@style/Theme.AppCompat.NoActionBar">
+                android:label={q}Food Order App{q}
+                android:usesCleartextTraffic={q}true{q}
+                android:theme={q}@style/Theme.AppCompat.NoActionBar{q}>
                 <activity
-                    android:name=".MainActivity"
-                    android:exported="true">
+                    android:name={q}.MainActivity{q}
+                    android:exported={q}true{q}>
                     <intent-filter>
-                        <action android:name="android.intent.action.MAIN" />
-                        <category android:name="android.intent.category.LAUNCHER" />
+                        <action android:name={q}android.intent.action.MAIN{q} />
+                        <category android:name={q}android.intent.category.LAUNCHER{q} />
                     </intent-filter>
                 </activity>
             </application>
         </manifest>
-        EOF
+        """
+        with open("app/src/main/AndroidManifest.xml", "w", encoding="utf-8") as f:
+            f.write(xml)
+        PY
         cat << 'EOF' > app/src/main/python/server_app.py
         import importlib.util
         import os
