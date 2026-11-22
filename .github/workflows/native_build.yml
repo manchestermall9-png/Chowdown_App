@@ -30,7 +30,7 @@ jobs:
       with:
         gradle-version: '8.5'
 
-    - name: Generate Project Structure & Copy v9.11.02 Files
+    - name: Generate Project Structure & Copy v9.11.03 Files
       run: |
         mkdir -p app/src/main/java/org/chowdown/pos
         mkdir -p app/src/main/python
@@ -102,8 +102,8 @@ jobs:
                 applicationId "org.chowdown.pos"
                 minSdk 24
                 targetSdk 34
-                versionCode 91102
-                versionName "9.11.02"
+                versionCode 91103
+                versionName "9.11.03"
 
                 ndk {
                     abiFilters "arm64-v8a", "x86_64"
@@ -175,16 +175,21 @@ jobs:
         import android.content.Context;
         import android.content.SharedPreferences;
         import android.content.pm.PackageManager;
+        import android.graphics.Color;
         import android.os.Build;
         import android.os.Bundle;
         import android.provider.Settings;
         import android.text.InputType;
+        import android.view.Gravity;
+        import android.view.View;
         import android.webkit.JavascriptInterface;
         import android.webkit.WebSettings;
         import android.webkit.WebView;
         import android.webkit.WebViewClient;
         import android.widget.EditText;
+        import android.widget.FrameLayout;
         import android.widget.LinearLayout;
+        import android.widget.ProgressBar;
         import android.widget.TextView;
         import android.widget.Toast;
 
@@ -217,7 +222,7 @@ jobs:
 
         public class MainActivity extends AppCompatActivity {
 
-            public static final String APP_VERSION = "v9.11.02";
+            public static final String APP_VERSION = "v9.11.03";
             private static final UUID SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
             private static final String PRINTER_PREFS = "pos_printer_prefs";
             private static final String KEY_SAVED_PRINTER_MAC = "saved_printer_mac";
@@ -227,6 +232,10 @@ jobs:
             private final ExecutorService printExecutor = Executors.newSingleThreadExecutor();
             private final ExecutorService pythonExecutor = Executors.newSingleThreadExecutor();
             private volatile boolean pythonStarted = false;
+
+            private FrameLayout rootLayout;
+            private LinearLayout loadingOverlay;
+            private TextView loadingText;
             private WebView webView;
             private String pendingReceiptJson = null;
 
@@ -301,34 +310,129 @@ jobs:
             }
 
             @SuppressLint("SetJavaScriptEnabled")
-            private void startPosApp() {
-                if (webView == null) {
-                    webView = new WebView(this);
-                    WebSettings settings = webView.getSettings();
-                    settings.setJavaScriptEnabled(true);
-                    settings.setDomStorageEnabled(true);
-
-                    webView.setWebViewClient(new WebViewClient());
-                    webView.addJavascriptInterface(new PrinterBridge(), "AndroidPrinter");
+            private void ensurePosViewsCreated() {
+                if (rootLayout != null) {
+                    return;
                 }
 
-                setContentView(webView);
+                rootLayout = new FrameLayout(this);
+                rootLayout.setBackgroundColor(Color.parseColor("#121212"));
+
+                webView = new WebView(this);
+                WebSettings settings = webView.getSettings();
+                settings.setJavaScriptEnabled(true);
+                settings.setDomStorageEnabled(true);
+                webView.addJavascriptInterface(new PrinterBridge(), "AndroidPrinter");
+
+                webView.setWebViewClient(new WebViewClient() {
+                    @Override
+                    public void onPageFinished(WebView view, String url) {
+                        super.onPageFinished(view, url);
+                        hideLoadingSpinner();
+                    }
+
+                    @Override
+                    public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
+                        super.onReceivedError(view, errorCode, description, failingUrl);
+                        showLoadingSpinner("Waiting for local POS server (" + failingUrl + ")...");
+                    }
+                });
+
+                rootLayout.addView(
+                        webView,
+                        new FrameLayout.LayoutParams(
+                                FrameLayout.LayoutParams.MATCH_PARENT,
+                                FrameLayout.LayoutParams.MATCH_PARENT
+                        )
+                );
+
+                int pad = (int) (24 * getResources().getDisplayMetrics().density);
+                loadingOverlay = new LinearLayout(this);
+                loadingOverlay.setOrientation(LinearLayout.VERTICAL);
+                loadingOverlay.setGravity(Gravity.CENTER);
+                loadingOverlay.setBackgroundColor(Color.parseColor("#121212"));
+                loadingOverlay.setPadding(pad, pad, pad, pad);
+                loadingOverlay.setClickable(true);
+
+                ProgressBar spinner = new ProgressBar(this);
+                spinner.setIndeterminate(true);
+                LinearLayout.LayoutParams spinnerParams = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                );
+                spinnerParams.bottomMargin = (int) (16 * getResources().getDisplayMetrics().density);
+                loadingOverlay.addView(spinner, spinnerParams);
+
+                TextView titleView = new TextView(this);
+                titleView.setText("Loading POS (" + APP_VERSION + ")");
+                titleView.setTextColor(Color.WHITE);
+                titleView.setTextSize(18f);
+                titleView.setGravity(Gravity.CENTER);
+                LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                );
+                titleParams.bottomMargin = (int) (8 * getResources().getDisplayMetrics().density);
+                loadingOverlay.addView(titleView, titleParams);
+
+                loadingText = new TextView(this);
+                loadingText.setText("Starting Python server, please wait...");
+                loadingText.setTextColor(Color.parseColor("#CCCCCC"));
+                loadingText.setTextSize(14f);
+                loadingText.setGravity(Gravity.CENTER);
+                loadingOverlay.addView(loadingText);
+
+                rootLayout.addView(
+                        loadingOverlay,
+                        new FrameLayout.LayoutParams(
+                                FrameLayout.LayoutParams.MATCH_PARENT,
+                                FrameLayout.LayoutParams.MATCH_PARENT
+                        )
+                );
+            }
+
+            private void showLoadingSpinner(String message) {
+                runOnUiThread(() -> {
+                    if (loadingText != null && message != null) {
+                        loadingText.setText(message);
+                    }
+                    if (loadingOverlay != null) {
+                        loadingOverlay.setVisibility(View.VISIBLE);
+                    }
+                });
+            }
+
+            private void hideLoadingSpinner() {
+                runOnUiThread(() -> {
+                    if (loadingOverlay != null) {
+                        loadingOverlay.setVisibility(View.GONE);
+                    }
+                });
+            }
+
+            private void startPosApp() {
+                ensurePosViewsCreated();
+                setContentView(rootLayout);
+                showLoadingSpinner("Starting Python server, please wait...");
                 startPythonAndLoadUrl("http://127.0.0.1:8080");
             }
 
             private void startPythonAndLoadUrl(String targetUrl) {
                 if (pythonStarted && Python.isStarted()) {
+                    showLoadingSpinner("Opening POS screen...");
                     webView.loadUrl(targetUrl);
                     return;
                 }
 
                 pythonExecutor.execute(() -> {
                     try {
+                        showLoadingSpinner("Initializing Python engine...");
                         if (!Python.isStarted()) {
                             Python.start(new AndroidPlatform(getApplicationContext()));
                         }
 
                         if (!pythonStarted) {
+                            showLoadingSpinner("Starting POS server, please wait...");
                             Python py = Python.getInstance();
                             PyObject module = py.getModule("pos_server");
                             if (module.containsKey("start_server")) {
@@ -342,18 +446,21 @@ jobs:
                         Thread.sleep(500);
                     } catch (PyException pyEx) {
                         final String err = pyEx.getMessage() != null ? pyEx.getMessage() : "Python error";
-                        runOnUiThread(() ->
-                                Toast.makeText(MainActivity.this, "Python startup error: " + err, Toast.LENGTH_LONG).show()
-                        );
+                        runOnUiThread(() -> {
+                            showLoadingSpinner("Python startup issue: " + err);
+                            Toast.makeText(MainActivity.this, "Python startup error: " + err, Toast.LENGTH_LONG).show();
+                        });
                     } catch (Exception ex) {
                         final String err = ex.getMessage() != null ? ex.getMessage() : "Failed to start Python";
-                        runOnUiThread(() ->
-                                Toast.makeText(MainActivity.this, "Startup error: " + err, Toast.LENGTH_LONG).show()
-                        );
+                        runOnUiThread(() -> {
+                            showLoadingSpinner("Startup issue: " + err);
+                            Toast.makeText(MainActivity.this, "Startup error: " + err, Toast.LENGTH_LONG).show();
+                        });
                     }
 
                     runOnUiThread(() -> {
                         if (!isFinishing() && !isDestroyed() && webView != null) {
+                            showLoadingSpinner("Opening POS screen...");
                             webView.loadUrl(targetUrl);
                         }
                     });
@@ -811,11 +918,11 @@ jobs:
         }
         EOF
 
-    - name: Build Installable v9.11.02 APK
+    - name: Build Installable v9.11.03 APK
       run: gradle assembleDebug --no-daemon
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ChowDownPOS_v9.11.02_APK
+        name: ChowDownPOS_v9.11.03_APK
         path: app/build/outputs/apk/debug/*.apk
