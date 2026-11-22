@@ -344,9 +344,15 @@ jobs:
             protected void onCreate(Bundle savedInstanceState) {
                 super.onCreate(savedInstanceState);
 
+                prefs = getSharedPreferences("FoodOrderPrefs", MODE_PRIVATE);
+                boolean hasShownInstalledMessage = prefs.getBoolean("has_shown_installed_message", false);
+                if (!hasShownInstalledMessage) {
+                    Toast.makeText(this, "App installed!", Toast.LENGTH_LONG).show();
+                    prefs.edit().putBoolean("has_shown_installed_message", true).apply();
+                }
+
                 initPython();
 
-                prefs = getSharedPreferences("FoodOrderPrefs", MODE_PRIVATE);
                 androidId = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
                 if (androidId == null) {
                     androidId = "UNKNOWN_DEVICE";
