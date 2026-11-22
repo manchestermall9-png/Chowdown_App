@@ -103,7 +103,7 @@ jobs:
 
             defaultConfig {
                 applicationId "org.chowdown.pos"
-                minSdk 21
+                minSdk 24
                 targetSdk 34
                 versionCode 910
                 versionName "9.10"
