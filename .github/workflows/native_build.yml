@@ -280,6 +280,8 @@ jobs:
                 thread.start()
             return _last_status
         EOF
+                ls -la app/src/main/python
+
         cat << 'EOF' > app/src/main/java/org/chowdown/pos/MainActivity.java
         package org.chowdown.pos;
 
