@@ -213,21 +213,32 @@ jobs:
                         setattr(mod, attr, os.path.join(data_dir, fname))
 
 
-        def _find_server_script(py_dir):
+                def _find_server_script(py_dir):
             preferred = ["v9.10.py", "main.py", "server.py"]
             for name in preferred:
                 candidate = os.path.join(py_dir, name)
-                if os.path.isfile(candidate):
-                    return candidate
+                try:
+                    if os.path.isfile(candidate):
+                        return candidate
+                except OSError:
+                    pass
             try:
-                py_files = sorted(
-                    f for f in os.listdir(py_dir)
-                    if f.endswith(".py") and f != "server_app.py"
-                )
-                if py_files:
-                    return os.path.join(py_dir, py_files[0])
+                if os.path.isdir(py_dir):
+                    py_files = sorted(
+                        f for f in os.listdir(py_dir)
+                        if f.endswith(".py") and f != "server_app.py"
+                    )
+                    if py_files:
+                        return os.path.join(py_dir, py_files[0])
             except OSError:
                 pass
+            for mod_name in ("v9.10", "main", "server"):
+                try:
+                    spec = importlib.util.find_spec(mod_name)
+                    if spec is not None and spec.origin:
+                        return spec.origin
+                except Exception:
+                    pass
             return None
 
 
