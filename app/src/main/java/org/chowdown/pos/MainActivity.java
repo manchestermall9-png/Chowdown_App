@@ -1,4 +1,3 @@
-
 package org.chowdown.pos;
 
 import android.app.AlertDialog;
@@ -156,7 +155,7 @@ public class MainActivity extends AppCompatActivity {
             } else {
                 new AlertDialog.Builder(this)
                     .setTitle("Invalid Key")
-                    .setMessage("The activation key entered is incorrect. Please try again.\n\nDevice ID: " + androidId + "\nExpected: " + expectedKey)
+                    .setMessage("The activation key entered is incorrect. Please try again.")
                     .setPositiveButton("OK", (d, w) -> showActivationDialog())
                     .setCancelable(false)
                     .show();
