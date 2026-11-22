@@ -28,6 +28,11 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 
+import com.chaquo.python.PyException;
+import com.chaquo.python.PyObject;
+import com.chaquo.python.Python;
+import com.chaquo.python.android.AndroidPlatform;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -47,7 +52,7 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
 
-    public static final String APP_VERSION = "v9.11.01";
+    public static final String APP_VERSION = "v9.11.02";
     private static final UUID SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
     private static final String PRINTER_PREFS = "pos_printer_prefs";
     private static final String KEY_SAVED_PRINTER_MAC = "saved_printer_mac";
@@ -55,6 +60,8 @@ public class MainActivity extends AppCompatActivity {
     private static final int LINE_WIDTH_58MM = 32;
 
     private final ExecutorService printExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService pythonExecutor = Executors.newSingleThreadExecutor();
+    private volatile boolean pythonServerStarted = false;
     private WebView webView;
     private String pendingReceiptJson = null;
 
@@ -130,17 +137,62 @@ public class MainActivity extends AppCompatActivity {
 
     @SuppressLint("SetJavaScriptEnabled")
     private void startPosApp() {
-        // TODO: Start your Chaquopy Python server here if not already started before WebView loads
-        webView = new WebView(this);
-        WebSettings settings = webView.getSettings();
-        settings.setJavaScriptEnabled(true);
-        settings.setDomStorageEnabled(true);
+        if (webView == null) {
+            webView = new WebView(this);
+            WebSettings settings = webView.getSettings();
+            settings.setJavaScriptEnabled(true);
+            settings.setDomStorageEnabled(true);
 
-        webView.setWebViewClient(new WebViewClient());
-        webView.addJavascriptInterface(new PrinterBridge(), "AndroidPrinter");
+            webView.setWebViewClient(new WebViewClient());
+            webView.addJavascriptInterface(new PrinterBridge(), "AndroidPrinter");
+        }
 
         setContentView(webView);
-        webView.loadUrl("http://127.0.0.1:8080");
+        startChaquopyServerAndLoadUrl("http://127.0.0.1:8080");
+    }
+
+    private void startChaquopyServerAndLoadUrl(String targetUrl) {
+        if (pythonServerStarted && Python.isStarted()) {
+            webView.loadUrl(targetUrl);
+            return;
+        }
+
+        pythonExecutor.execute(() -> {
+            try {
+                if (!Python.isStarted()) {
+                    Python.start(new AndroidPlatform(getApplicationContext()));
+                }
+
+                if (!pythonServerStarted) {
+                    Python py = Python.getInstance();
+                    PyObject module = py.getModule("server");
+                    if (module.containsKey("start_server")) {
+                        module.callAttr("start_server");
+                    } else if (module.containsKey("main")) {
+                        module.callAttr("main");
+                    }
+                    pythonServerStarted = true;
+                }
+
+                Thread.sleep(500);
+            } catch (PyException pyEx) {
+                final String err = pyEx.getMessage() != null ? pyEx.getMessage() : "Python startup error";
+                runOnUiThread(() ->
+                        Toast.makeText(MainActivity.this, "Python error: " + err, Toast.LENGTH_LONG).show()
+                );
+            } catch (Exception ex) {
+                final String err = ex.getMessage() != null ? ex.getMessage() : "Failed to start Python";
+                runOnUiThread(() ->
+                        Toast.makeText(MainActivity.this, "Startup error: " + err, Toast.LENGTH_LONG).show()
+                );
+            }
+
+            runOnUiThread(() -> {
+                if (!isFinishing() && !isDestroyed() && webView != null) {
+                    webView.loadUrl(targetUrl);
+                }
+            });
+        });
     }
 
     public class PrinterBridge {
@@ -421,6 +473,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         printExecutor.shutdownNow();
+        pythonExecutor.shutdownNow();
     }
 
     public static class LicenseManager {
