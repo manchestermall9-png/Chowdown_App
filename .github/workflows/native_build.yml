@@ -30,7 +30,7 @@ jobs:
       with:
         gradle-version: '8.5'
 
-    - name: Generate Project Structure & Copy v9.11.04 Files
+    - name: Generate Project Structure & Copy v9.11.05 Files
       run: |
         mkdir -p app/src/main/java/org/chowdown/pos
         mkdir -p app/src/main/python
@@ -106,8 +106,8 @@ jobs:
                 applicationId "org.chowdown.pos"
                 minSdk 24
                 targetSdk 34
-                versionCode 91104
-                versionName "9.11.04"
+                versionCode 91105
+                versionName "9.11.05"
 
                 ndk {
                     abiFilters "arm64-v8a", "x86_64"
@@ -192,6 +192,7 @@ jobs:
         import android.webkit.WebSettings;
         import android.webkit.WebView;
         import android.webkit.WebViewClient;
+        import android.widget.Button;
         import android.widget.EditText;
         import android.widget.FrameLayout;
         import android.widget.LinearLayout;
@@ -213,6 +214,8 @@ jobs:
         import org.json.JSONObject;
 
         import java.io.OutputStream;
+        import java.net.InetSocketAddress;
+        import java.net.Socket;
         import java.nio.charset.StandardCharsets;
         import java.security.MessageDigest;
         import java.text.ParseException;
@@ -228,12 +231,13 @@ jobs:
 
         public class MainActivity extends AppCompatActivity {
 
-            public static final String APP_VERSION = "v9.11.04";
+            public static final String APP_VERSION = "v9.11.05";
             private static final UUID SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
             private static final String PRINTER_PREFS = "pos_printer_prefs";
             private static final String KEY_SAVED_PRINTER_MAC = "saved_printer_mac";
             private static final String KEY_SAVED_PRINTER_NAME = "saved_printer_name";
             private static final int LINE_WIDTH_58MM = 32;
+            private static final int LOCAL_PORT = 8080;
 
             private final ExecutorService printExecutor = Executors.newSingleThreadExecutor();
             private final ExecutorService pythonExecutor = Executors.newSingleThreadExecutor();
@@ -243,7 +247,9 @@ jobs:
 
             private FrameLayout rootLayout;
             private LinearLayout loadingOverlay;
+            private ProgressBar spinner;
             private TextView loadingText;
+            private Button retryButton;
             private WebView webView;
             private String pendingReceiptJson = null;
 
@@ -336,14 +342,14 @@ jobs:
                     @Override
                     public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                         super.onPageStarted(view, url, favicon);
-                        showLoadingSpinner("Loading POS screen, please wait...");
+                        showLoadingSpinner("Loading POS screen, please wait...", false);
                     }
 
                     @Override
                     public void onPageFinished(WebView view, String url) {
                         super.onPageFinished(view, url);
                         if (!pythonReady) {
-                            showLoadingSpinner("Finishing server startup, please wait...");
+                            showLoadingSpinner("Finishing server startup, please wait...", false);
                             return;
                         }
                         mainHandler.postDelayed(() -> {
@@ -356,12 +362,9 @@ jobs:
                     @Override
                     public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
                         super.onReceivedError(view, errorCode, description, failingUrl);
-                        showLoadingSpinner("Starting local POS server, please wait...");
-                        mainHandler.postDelayed(() -> {
-                            if (!isFinishing() && !isDestroyed() && webView != null) {
-                                webView.reload();
-                            }
-                        }, 1500);
+                        if (!pythonReady) {
+                            showLoadingSpinner("Waiting for local POS server on port " + LOCAL_PORT + "...", true);
+                        }
                     }
                 });
 
@@ -381,7 +384,7 @@ jobs:
                 loadingOverlay.setPadding(pad, pad, pad, pad);
                 loadingOverlay.setClickable(true);
 
-                ProgressBar spinner = new ProgressBar(this);
+                spinner = new ProgressBar(this);
                 spinner.setIndeterminate(true);
                 LinearLayout.LayoutParams spinnerParams = new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -403,11 +406,26 @@ jobs:
                 loadingOverlay.addView(titleView, titleParams);
 
                 loadingText = new TextView(this);
-                loadingText.setText("Starting Python server, please wait...");
+                loadingText.setText("Starting local POS server, please wait...");
                 loadingText.setTextColor(Color.parseColor("#CCCCCC"));
                 loadingText.setTextSize(14f);
                 loadingText.setGravity(Gravity.CENTER);
-                loadingOverlay.addView(loadingText);
+                LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                );
+                textParams.bottomMargin = (int) (18 * getResources().getDisplayMetrics().density);
+                loadingOverlay.addView(loadingText, textParams);
+
+                retryButton = new Button(this);
+                retryButton.setText("Retry Startup");
+                retryButton.setVisibility(View.GONE);
+                retryButton.setOnClickListener(v -> {
+                    pythonStarted = false;
+                    pythonReady = false;
+                    startPythonAndLoadUrl("http://127.0.0.1:" + LOCAL_PORT);
+                });
+                loadingOverlay.addView(retryButton);
 
                 rootLayout.addView(
                         loadingOverlay,
@@ -418,10 +436,16 @@ jobs:
                 );
             }
 
-            private void showLoadingSpinner(String message) {
+            private void showLoadingSpinner(String message, boolean showRetry) {
                 runOnUiThread(() -> {
                     if (loadingText != null && message != null) {
                         loadingText.setText(message);
+                    }
+                    if (spinner != null) {
+                        spinner.setVisibility(showRetry ? View.GONE : View.VISIBLE);
+                    }
+                    if (retryButton != null) {
+                        retryButton.setVisibility(showRetry ? View.VISIBLE : View.GONE);
                     }
                     if (loadingOverlay != null) {
                         loadingOverlay.setVisibility(View.VISIBLE);
@@ -440,58 +464,81 @@ jobs:
             private void startPosApp() {
                 ensurePosViewsCreated();
                 setContentView(rootLayout);
-                showLoadingSpinner("Starting Python server, please wait...");
-                startPythonAndLoadUrl("http://127.0.0.1:8080");
+                showLoadingSpinner("Starting local POS server, please wait...", false);
+                startPythonAndLoadUrl("http://127.0.0.1:" + LOCAL_PORT);
+            }
+
+            private boolean isPortOpen(String host, int port) {
+                try (Socket socket = new Socket()) {
+                    socket.connect(new InetSocketAddress(host, port), 300);
+                    return true;
+                } catch (Exception e) {
+                    return false;
+                }
             }
 
             private void startPythonAndLoadUrl(String targetUrl) {
                 if (pythonStarted && Python.isStarted() && pythonReady) {
-                    showLoadingSpinner("Opening POS screen...");
+                    showLoadingSpinner("Opening POS screen...", false);
                     webView.loadUrl(targetUrl);
                     return;
                 }
 
+                showLoadingSpinner("Starting local POS server, please wait...", false);
+
                 pythonExecutor.execute(() -> {
                     try {
-                        showLoadingSpinner("Initializing Python engine...");
+                        showLoadingSpinner("Initializing Python engine...", false);
                         if (!Python.isStarted()) {
                             Python.start(new AndroidPlatform(getApplicationContext()));
                         }
 
                         if (!pythonStarted) {
-                            showLoadingSpinner("Starting POS server, please wait...");
+                            showLoadingSpinner("Starting POS server, please wait...", false);
                             Python py = Python.getInstance();
                             PyObject module = py.getModule("pos_server");
                             if (module.containsKey("start_server")) {
                                 module.callAttr("start_server");
+                            } else if (module.containsKey("run_server")) {
+                                module.callAttr("run_server");
                             } else if (module.containsKey("main")) {
                                 module.callAttr("main");
                             }
                             pythonStarted = true;
                         }
 
-                        Thread.sleep(1000);
+                        boolean portListening = false;
+                        for (int attempt = 0; attempt < 30; attempt++) {
+                            if (isPortOpen("127.0.0.1", LOCAL_PORT)) {
+                                portListening = true;
+                                break;
+                            }
+                            Thread.sleep(500);
+                        }
+
+                        if (!portListening) {
+                            pythonReady = false;
+                            showLoadingSpinner(
+                                    "Local server did not start on port " + LOCAL_PORT + ". Check Python server startup in pos_server.py.",
+                                    true
+                            );
+                            return;
+                        }
+
                         pythonReady = true;
+                        runOnUiThread(() -> {
+                            if (!isFinishing() && !isDestroyed() && webView != null) {
+                                showLoadingSpinner("Opening POS screen...", false);
+                                webView.loadUrl(targetUrl);
+                            }
+                        });
                     } catch (PyException pyEx) {
                         final String err = pyEx.getMessage() != null ? pyEx.getMessage() : "Python error";
-                        runOnUiThread(() -> {
-                            showLoadingSpinner("Python startup issue: " + err);
-                            Toast.makeText(MainActivity.this, "Python startup error: " + err, Toast.LENGTH_LONG).show();
-                        });
+                        showLoadingSpinner("Python startup error: " + err, true);
                     } catch (Exception ex) {
                         final String err = ex.getMessage() != null ? ex.getMessage() : "Failed to start Python";
-                        runOnUiThread(() -> {
-                            showLoadingSpinner("Startup issue: " + err);
-                            Toast.makeText(MainActivity.this, "Startup error: " + err, Toast.LENGTH_LONG).show();
-                        });
+                        showLoadingSpinner("Startup error: " + err, true);
                     }
-
-                    runOnUiThread(() -> {
-                        if (!isFinishing() && !isDestroyed() && webView != null) {
-                            showLoadingSpinner("Opening POS screen...");
-                            webView.loadUrl(targetUrl);
-                        }
-                    });
                 });
             }
 
@@ -947,11 +994,11 @@ jobs:
         }
         EOF
 
-    - name: Build Installable v9.11.04 APK
+    - name: Build Installable v9.11.05 APK
       run: gradle assembleDebug --no-daemon
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ChowDownPOS_v9.11.04_APK
+        name: ChowDownPOS_v9.11.05_APK
         path: app/build/outputs/apk/debug/*.apk
