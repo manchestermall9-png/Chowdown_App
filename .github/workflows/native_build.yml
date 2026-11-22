@@ -124,9 +124,7 @@ jobs:
         }
         EOF
 
-        
-
-                python3 - << 'PY'
+        python3 - << 'PY'
         q = chr(34)
         xml = f"""<?xml version={q}1.0{q} encoding={q}utf-8{q}?>
         <manifest xmlns:android={q}http://schemas.android.com/apk/res/android{q}>
@@ -150,6 +148,7 @@ jobs:
         with open("app/src/main/AndroidManifest.xml", "w", encoding="utf-8") as f:
             f.write(xml)
         PY
+
         cat << 'EOF' > app/src/main/python/server_app.py
         import importlib.util
         import os
@@ -213,7 +212,7 @@ jobs:
                         setattr(mod, attr, os.path.join(data_dir, fname))
 
 
-                def _find_server_script(py_dir):
+        def _find_server_script(py_dir):
             preferred = ["v9.10.py", "main.py", "server.py"]
             for name in preferred:
                 candidate = os.path.join(py_dir, name)
@@ -291,7 +290,8 @@ jobs:
                 thread.start()
             return _last_status
         EOF
-                ls -la app/src/main/python
+
+        ls -la app/src/main/python
 
         cat << 'EOF' > app/src/main/java/org/chowdown/pos/MainActivity.java
         package org.chowdown.pos;
