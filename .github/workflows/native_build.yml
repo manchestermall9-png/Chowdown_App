@@ -216,7 +216,7 @@ jobs:
 
 
         def _find_server_script(py_dir):
-            preferred = ["v9.10.py", "main.py", "server.py"]
+            preferred = ["v9.10.py", "v9_10.py", "main.py", "server.py"]
             for name in preferred:
                 candidate = os.path.join(py_dir, name)
                 try:
@@ -237,6 +237,10 @@ jobs:
             return None
 
 
+        def _is_server_module(mod):
+            return mod is not None and hasattr(mod, "Handler") and hasattr(mod, "ThreadingHTTPServer")
+
+
         def _load_server_module():
             py_dir = os.path.dirname(os.path.abspath(__file__))
             script_path = _find_server_script(py_dir)
@@ -248,27 +252,34 @@ jobs:
                     spec.loader.exec_module(mod)
                     return mod, os.path.basename(script_path)
 
-            candidate_mods = ["v9.10", "main", "server"]
+            for mod_name, mod in list(sys.modules.items()):
+                if mod_name != "server_app" and _is_server_module(mod):
+                    return mod, f"{mod_name}.py"
+
+            candidate_mods = ["v9_10", "main", "server"]
+            discovered = []
             try:
-                for _, name, _ in pkgutil.iter_modules():
-                    if name != "server_app" and name not in candidate_mods:
-                        if any(k in name.lower() for k in ("pos", "server", "app", "order", "v9")):
+                for finder, name, _ in pkgutil.iter_modules():
+                    if name == "server_app":
+                        continue
+                    fname = str(finder)
+                    if "AssetFinder" in fname or "chaquopy" in fname.lower():
+                        discovered.append(name)
+                        if name not in candidate_mods:
                             candidate_mods.append(name)
             except Exception:
                 pass
 
-            errors = []
             for mod_name in candidate_mods:
                 try:
                     mod = importlib.import_module(mod_name)
-                    if hasattr(mod, "Handler") and hasattr(mod, "ThreadingHTTPServer"):
+                    if _is_server_module(mod):
                         return mod, f"{mod_name}.py"
-                    errors.append(f"{mod_name}: missing Handler/ThreadingHTTPServer")
-                except Exception as exc:
-                    errors.append(f"{mod_name}: {exc}")
+                except Exception:
+                    continue
 
-            detail = " | ".join(errors[:4]) if errors else f"tried {candidate_mods}"
-            raise FileNotFoundError(f"No server .py file found in {py_dir} ({detail})")
+            sample = ", ".join(discovered[:10]) if discovered else "none"
+            raise FileNotFoundError(f"No server module in {py_dir} (asset_mods: {sample})")
 
 
         def _run_server():
