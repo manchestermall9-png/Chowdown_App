@@ -41,6 +41,9 @@ jobs:
         cp -f *.json app/src/main/assets/ 2>/dev/null || true
         cp -f *.txt app/src/main/assets/ 2>/dev/null || true
         cp -f *.py app/src/main/python/ 2>/dev/null || true
+        if [ -f "v9.10.py" ]; then
+          cp -f "v9.10.py" app/src/main/python/pos_server.py
+        fi
 
         cat << 'EOF' > gradle.properties
         android.useAndroidX=true
@@ -151,11 +154,8 @@ jobs:
 
         cat << 'EOF' > app/src/main/python/server_app.py
         import importlib
-        import importlib.util
         import os
-        import pkgutil
         import socket
-        import sys
         import tempfile
         import threading
 
@@ -215,71 +215,15 @@ jobs:
                         setattr(mod, attr, os.path.join(data_dir, fname))
 
 
-        def _find_server_script(py_dir):
-            preferred = ["v9.10.py", "v9_10.py", "main.py", "server.py"]
-            for name in preferred:
-                candidate = os.path.join(py_dir, name)
-                try:
-                    if os.path.isfile(candidate):
-                        return candidate
-                except OSError:
-                    pass
-            try:
-                if os.path.isdir(py_dir):
-                    py_files = sorted(
-                        f for f in os.listdir(py_dir)
-                        if f.endswith(".py") and f != "server_app.py"
-                    )
-                    if py_files:
-                        return os.path.join(py_dir, py_files[0])
-            except OSError:
-                pass
-            return None
-
-
-        def _is_server_module(mod):
-            return mod is not None and hasattr(mod, "Handler") and hasattr(mod, "ThreadingHTTPServer")
-
-
         def _load_server_module():
-            py_dir = os.path.dirname(os.path.abspath(__file__))
-            script_path = _find_server_script(py_dir)
-            if script_path:
-                mod_name = os.path.splitext(os.path.basename(script_path))[0].replace(".", "_")
-                spec = importlib.util.spec_from_file_location(mod_name, script_path)
-                if spec is not None and spec.loader is not None:
-                    mod = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(mod)
-                    return mod, os.path.basename(script_path)
-
-            for mod_name, mod in list(sys.modules.items()):
-                if mod_name != "server_app" and _is_server_module(mod):
-                    return mod, f"{mod_name}.py"
-
-            candidate_mods = ["v9_10", "main", "server"]
-            discovered = []
-            try:
-                for finder, name, _ in pkgutil.iter_modules():
-                    if name == "server_app":
-                        continue
-                    fname = str(finder)
-                    if "AssetFinder" in fname or "chaquopy" in fname.lower():
-                        discovered.append(name)
-                        if name not in candidate_mods:
-                            candidate_mods.append(name)
-            except Exception:
-                pass
-
-            for mod_name in candidate_mods:
+            for mod_name in ("pos_server", "main", "server"):
                 try:
                     mod = importlib.import_module(mod_name)
-                    if _is_server_module(mod):
+                    if hasattr(mod, "Handler") and hasattr(mod, "ThreadingHTTPServer"):
                         return mod, f"{mod_name}.py"
                 except Exception:
                     continue
-
-            sample = ", ".join(discovered[:10]) if discovered else "none"
-            raise FileNotFoundError(f"No server module in {py_dir} (asset_mods: {sample})")
+            raise FileNotFoundError("Could not import pos_server module")
 
 
         def _run_server():
@@ -330,6 +274,7 @@ jobs:
         import android.os.Looper;
         import android.provider.Settings;
         import android.text.InputType;
+        import android.view.Gravity;
         import android.webkit.WebResourceError;
         import android.webkit.WebResourceRequest;
         import android.webkit.WebSettings;
@@ -337,6 +282,7 @@ jobs:
         import android.webkit.WebViewClient;
         import android.widget.EditText;
         import android.widget.LinearLayout;
+        import android.widget.ProgressBar;
         import android.widget.TextView;
         import android.widget.Toast;
         import androidx.appcompat.app.AppCompatActivity;
@@ -360,6 +306,7 @@ jobs:
                     prefs.edit().putBoolean("has_shown_installed_message", true).apply();
                 }
 
+                showStartupProgress("Preparing app & starting local server...");
                 initPython();
 
                 androidId = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
@@ -374,6 +321,24 @@ jobs:
                 } else {
                     checkServerConfig();
                 }
+            }
+
+            private void showStartupProgress(String message) {
+                LinearLayout layout = new LinearLayout(this);
+                layout.setOrientation(LinearLayout.VERTICAL);
+                layout.setGravity(Gravity.CENTER);
+                layout.setPadding(60, 60, 60, 60);
+
+                ProgressBar spinner = new ProgressBar(this);
+                layout.addView(spinner);
+
+                TextView tvStatus = new TextView(this);
+                tvStatus.setText(message);
+                tvStatus.setGravity(Gravity.CENTER);
+                tvStatus.setPadding(0, 30, 0, 0);
+                layout.addView(tvStatus);
+
+                setContentView(layout);
             }
 
             private void initPython() {
