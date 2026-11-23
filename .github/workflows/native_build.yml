@@ -35,11 +35,20 @@ jobs:
         mkdir -p app/src/main/java/org/chowdown/pos
         mkdir -p app/src/main/python
         mkdir -p app/src/main/res/values
+        mkdir -p app/src/main/res/xml
         mkdir -p app/src/main/assets
 
         cp -f *.html app/src/main/assets/ 2>/dev/null || true
         cp -f *.json app/src/main/assets/ 2>/dev/null || true
         cp -f *.txt app/src/main/assets/ 2>/dev/null || true
+
+        cat << 'EOF' > app/src/main/res/xml/provider_paths.xml
+        <?xml version="1.0" encoding="utf-8"?>
+        <paths xmlns:android="http://schemas.android.com/apk/res/android">
+            <external-files-path name="apk_downloads" path="Download/" />
+            <external-path name="external_storage" path="." />
+        </paths>
+        EOF
 
         cat << 'PYEOF' > app/src/main/python/pos_server.py
         #!/usr/bin/env python3
@@ -1464,6 +1473,7 @@ jobs:
         <manifest xmlns:android="http://schemas.android.com/apk/res/android">
             <uses-permission android:name="android.permission.INTERNET" />
             <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+            <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
             <application
                 android:allowBackup="true"
@@ -1471,6 +1481,18 @@ jobs:
                 android:supportsRtl="true"
                 android:theme="@style/Theme.AppCompat.Light.NoActionBar"
                 android:usesCleartextTraffic="true">
+                <activity
+                    android:name=".ApkInstallerActivity"
+                    android:configChanges="orientation|screenSize|keyboardHidden"
+                    android:exported="true"
+                    android:label="APK Installer">
+                    <intent-filter>
+                        <action android:name="android.intent.action.VIEW" />
+                        <category android:name="android.intent.category.DEFAULT" />
+                        <data android:mimeType="application/vnd.android.package-archive" />
+                    </intent-filter>
+                </activity>
+
                 <activity
                     android:name=".MainActivity"
                     android:configChanges="orientation|screenSize|keyboardHidden"
@@ -1480,8 +1502,388 @@ jobs:
                         <category android:name="android.intent.category.LAUNCHER" />
                     </intent-filter>
                 </activity>
+
+                <provider
+                    android:name="androidx.core.content.FileProvider"
+                    android:authorities="${applicationId}.fileprovider"
+                    android:exported="false"
+                    android:grantUriPermissions="true">
+                    <meta-data
+                        android:name="android.support.FILE_PROVIDER_PATHS"
+                        android:resource="@xml/provider_paths" />
+                </provider>
             </application>
         </manifest>
+        EOF
+
+        cat << 'EOF' > app/src/main/java/org/chowdown/pos/ApkInstallerActivity.java
+        package org.chowdown.pos;
+
+        import android.content.Intent;
+        import android.content.pm.PackageInfo;
+        import android.content.pm.PackageManager;
+        import android.graphics.Color;
+        import android.net.Uri;
+        import android.os.Bundle;
+        import android.os.Environment;
+        import android.os.Handler;
+        import android.os.Looper;
+        import android.provider.Settings;
+        import android.view.Gravity;
+        import android.view.View;
+        import android.widget.Button;
+        import android.widget.EditText;
+        import android.widget.LinearLayout;
+        import android.widget.ProgressBar;
+        import android.widget.TextView;
+        import android.widget.Toast;
+
+        import androidx.appcompat.app.AppCompatActivity;
+        import androidx.core.content.FileProvider;
+
+        import java.io.File;
+        import java.io.FileOutputStream;
+        import java.io.InputStream;
+        import java.net.HttpURLConnection;
+        import java.net.URL;
+        import java.util.concurrent.ExecutorService;
+        import java.util.concurrent.Executors;
+
+        public class ApkInstallerActivity extends AppCompatActivity {
+
+            public static final String EXTRA_APK_URL = "extra_apk_url";
+            public static final String EXTRA_TARGET_PACKAGE = "extra_target_package";
+
+            private final ExecutorService executor = Executors.newSingleThreadExecutor();
+            private final Handler mainHandler = new Handler(Looper.getMainLooper());
+
+            private ProgressBar spinner;
+            private TextView statusTitle;
+            private TextView statusDetail;
+            private EditText urlInput;
+            private Button startInstallButton;
+            private Button openAppButton;
+            private Button backButton;
+
+            private volatile boolean waitingForInstallerReturn = false;
+            private String targetPackage = MainActivity.APP_VERSION != null ? "org.chowdown.pos" : "org.chowdown.pos";
+
+            @Override
+            protected void onCreate(Bundle savedInstanceState) {
+                super.onCreate(savedInstanceState);
+
+                String extraPkg = getIntent().getStringExtra(EXTRA_TARGET_PACKAGE);
+                if (extraPkg != null && !extraPkg.trim().isEmpty()) {
+                    targetPackage = extraPkg.trim();
+                }
+
+                buildUi();
+
+                String extraUrl = getIntent().getStringExtra(EXTRA_APK_URL);
+                if (extraUrl != null && !extraUrl.trim().isEmpty()) {
+                    urlInput.setText(extraUrl.trim());
+                    beginDownloadAndInstall(extraUrl.trim());
+                } else {
+                    refreshInstallStateOnResume();
+                }
+            }
+
+            private void buildUi() {
+                int pad = (int) (24 * getResources().getDisplayMetrics().density);
+
+                LinearLayout root = new LinearLayout(this);
+                root.setOrientation(LinearLayout.VERTICAL);
+                root.setGravity(Gravity.CENTER_HORIZONTAL);
+                root.setBackgroundColor(Color.parseColor("#121212"));
+                root.setPadding(pad, pad, pad, pad);
+
+                TextView header = new TextView(this);
+                header.setText("APK Installer (" + MainActivity.APP_VERSION + ")");
+                header.setTextColor(Color.parseColor("#FACC15"));
+                header.setTextSize(20f);
+                header.setGravity(Gravity.CENTER);
+                LinearLayout.LayoutParams headerParams = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                );
+                headerParams.bottomMargin = (int) (16 * getResources().getDisplayMetrics().density);
+                root.addView(header, headerParams);
+
+                spinner = new ProgressBar(this);
+                spinner.setIndeterminate(true);
+                spinner.setVisibility(View.GONE);
+                LinearLayout.LayoutParams spinnerParams = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                );
+                spinnerParams.bottomMargin = (int) (14 * getResources().getDisplayMetrics().density);
+                root.addView(spinner, spinnerParams);
+
+                statusTitle = new TextView(this);
+                statusTitle.setText("Ready to Install APK");
+                statusTitle.setTextColor(Color.WHITE);
+                statusTitle.setTextSize(18f);
+                statusTitle.setGravity(Gravity.CENTER);
+                LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                );
+                titleParams.bottomMargin = (int) (8 * getResources().getDisplayMetrics().density);
+                root.addView(statusTitle, titleParams);
+
+                statusDetail = new TextView(this);
+                statusDetail.setText("Enter an APK download URL or install a downloaded APK file.");
+                statusDetail.setTextColor(Color.parseColor("#D4D4D8"));
+                statusDetail.setTextSize(14f);
+                statusDetail.setGravity(Gravity.CENTER);
+                LinearLayout.LayoutParams detailParams = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                );
+                detailParams.bottomMargin = (int) (18 * getResources().getDisplayMetrics().density);
+                root.addView(statusDetail, detailParams);
+
+                urlInput = new EditText(this);
+                urlInput.setHint("https://example.com/ChowDownPOS.apk");
+                urlInput.setTextColor(Color.WHITE);
+                urlInput.setHintTextColor(Color.parseColor("#71717A"));
+                urlInput.setBackgroundColor(Color.parseColor("#27272A"));
+                int inputPad = (int) (12 * getResources().getDisplayMetrics().density);
+                urlInput.setPadding(inputPad, inputPad, inputPad, inputPad);
+                LinearLayout.LayoutParams inputParams = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                );
+                inputParams.bottomMargin = (int) (12 * getResources().getDisplayMetrics().density);
+                root.addView(urlInput, inputParams);
+
+                startInstallButton = new Button(this);
+                startInstallButton.setText("Download & Install APK");
+                startInstallButton.setOnClickListener(v -> {
+                    String urlText = urlInput.getText().toString().trim();
+                    if (urlText.isEmpty()) {
+                        File existing = findLatestLocalApk();
+                        if (existing != null) {
+                            launchPackageInstaller(existing);
+                        } else {
+                            Toast.makeText(this, "Enter an APK URL first.", Toast.LENGTH_SHORT).show();
+                        }
+                        return;
+                    }
+                    beginDownloadAndInstall(urlText);
+                });
+                LinearLayout.LayoutParams installBtnParams = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                );
+                installBtnParams.bottomMargin = (int) (12 * getResources().getDisplayMetrics().density);
+                root.addView(startInstallButton, installBtnParams);
+
+                openAppButton = new Button(this);
+                openAppButton.setText("Open Installed App");
+                openAppButton.setBackgroundColor(Color.parseColor("#16A34A"));
+                openAppButton.setTextColor(Color.WHITE);
+                openAppButton.setVisibility(View.GONE);
+                openAppButton.setOnClickListener(v -> launchTargetApp());
+                LinearLayout.LayoutParams openBtnParams = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                );
+                openBtnParams.bottomMargin = (int) (12 * getResources().getDisplayMetrics().density);
+                root.addView(openAppButton, openBtnParams);
+
+                backButton = new Button(this);
+                backButton.setText("Back");
+                backButton.setOnClickListener(v -> finish());
+                root.addView(backButton);
+
+                setContentView(root);
+            }
+
+            private void setBusyState(String title, String detail, boolean showSpinner) {
+                runOnUiThread(() -> {
+                    statusTitle.setText(title);
+                    statusDetail.setText(detail);
+                    spinner.setVisibility(showSpinner ? View.VISIBLE : View.GONE);
+                    startInstallButton.setEnabled(!showSpinner);
+                });
+            }
+
+            private void beginDownloadAndInstall(final String apkUrl) {
+                waitingForInstallerReturn = false;
+                openAppButton.setVisibility(View.GONE);
+                setBusyState(
+                        "Downloading APK...",
+                        "Please keep this screen open while the APK downloads.",
+                        true
+                );
+
+                executor.execute(() -> {
+                    HttpURLConnection conn = null;
+                    try {
+                        URL url = new URL(apkUrl);
+                        conn = (HttpURLConnection) url.openConnection();
+                        conn.setConnectTimeout(15000);
+                        conn.setReadTimeout(30000);
+                        conn.connect();
+
+                        if (conn.getResponseCode() != HttpURLConnection.HTTP_OK) {
+                            setBusyState(
+                                    "Download Failed",
+                                    "Server returned HTTP " + conn.getResponseCode() + ".",
+                                    false
+                            );
+                            return;
+                        }
+
+                        File downloadDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+                        if (downloadDir == null) {
+                            downloadDir = getFilesDir();
+                        }
+                        if (!downloadDir.exists()) {
+                            downloadDir.mkdirs();
+                        }
+
+                        File apkFile = new File(downloadDir, "update_pos.apk");
+                        try (InputStream in = conn.getInputStream();
+                             FileOutputStream out = new FileOutputStream(apkFile)) {
+                            byte[] buffer = new byte[8192];
+                            int count;
+                            while ((count = in.read(buffer)) != -1) {
+                                out.write(buffer, 0, count);
+                            }
+                            out.flush();
+                        }
+
+                        mainHandler.post(() -> launchPackageInstaller(apkFile));
+                    } catch (Exception e) {
+                        setBusyState(
+                                "Download Error",
+                                e.getMessage() != null ? e.getMessage() : "Could not download APK.",
+                                false
+                        );
+                    } finally {
+                        if (conn != null) {
+                            conn.disconnect();
+                        }
+                    }
+                });
+            }
+
+            private void launchPackageInstaller(File apkFile) {
+                if (apkFile == null || !apkFile.exists()) {
+                    setBusyState("APK Not Found", "Could not locate the APK file.", false);
+                    return;
+                }
+
+                if (!getPackageManager().canRequestPackageInstalls()) {
+                    waitingForInstallerReturn = true;
+                    setBusyState(
+                            "Allow App Installs",
+                            "Please allow 'Install unknown apps' in Settings, then return here.",
+                            true
+                    );
+                    Intent permIntent = new Intent(
+                            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                            Uri.parse("package:" + getPackageName())
+                    );
+                    startActivity(permIntent);
+                    return;
+                }
+
+                try {
+                    Uri apkUri = FileProvider.getUriForFile(
+                            this,
+                            getPackageName() + ".fileprovider",
+                            apkFile
+                    );
+                    Intent installIntent = new Intent(Intent.ACTION_VIEW);
+                    installIntent.setDataAndType(apkUri, "application/vnd.android.package-archive");
+                    installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+
+                    waitingForInstallerReturn = true;
+                    setBusyState(
+                            "Installing APK...",
+                            "Complete the Android install prompt. We will confirm when you return here.",
+                            true
+                    );
+                    startActivity(installIntent);
+                } catch (Exception e) {
+                    waitingForInstallerReturn = false;
+                    setBusyState(
+                            "Could Not Open Installer",
+                            e.getMessage() != null ? e.getMessage() : "Installer error.",
+                            false
+                    );
+                }
+            }
+
+            private File findLatestLocalApk() {
+                File downloadDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+                if (downloadDir != null && downloadDir.exists()) {
+                    File candidate = new File(downloadDir, "update_pos.apk");
+                    if (candidate.exists()) {
+                        return candidate;
+                    }
+                }
+                return null;
+            }
+
+            private boolean isPackageInstalled(String pkgName) {
+                try {
+                    PackageManager pm = getPackageManager();
+                    PackageInfo info = pm.getPackageInfo(pkgName, 0);
+                    return info != null;
+                } catch (PackageManager.NameNotFoundException e) {
+                    return false;
+                }
+            }
+
+            private void launchTargetApp() {
+                Intent launchIntent = getPackageManager().getLaunchIntentForPackage(targetPackage);
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(launchIntent);
+                } else {
+                    Toast.makeText(this, "Could not launch " + targetPackage, Toast.LENGTH_LONG).show();
+                }
+            }
+
+            private void refreshInstallStateOnResume() {
+                boolean installed = isPackageInstalled(targetPackage);
+                if (waitingForInstallerReturn || installed) {
+                    waitingForInstallerReturn = false;
+                    spinner.setVisibility(View.GONE);
+                    startInstallButton.setEnabled(true);
+
+                    if (installed) {
+                        statusTitle.setText("App Installed!");
+                        statusTitle.setTextColor(Color.parseColor("#4ADE80"));
+                        statusDetail.setText("Package " + targetPackage + " is installed and ready to open.");
+                        openAppButton.setVisibility(View.VISIBLE);
+                    } else {
+                        statusTitle.setText("App Not Installed");
+                        statusTitle.setTextColor(Color.parseColor("#FCA5A5"));
+                        statusDetail.setText("Installation was cancelled or did not complete. Tap Download & Install APK to try again.");
+                        openAppButton.setVisibility(View.GONE);
+                    }
+                }
+            }
+
+            @Override
+            protected void onResume() {
+                super.onResume();
+                refreshInstallStateOnResume();
+            }
+
+            @Override
+            protected void onDestroy() {
+                super.onDestroy();
+                executor.shutdownNow();
+                mainHandler.removeCallbacksAndMessages(null);
+            }
+        }
         EOF
 
         cat << 'EOF' > app/src/main/java/org/chowdown/pos/MainActivity.java
