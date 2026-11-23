@@ -44,13 +44,14 @@ jobs:
         cat << 'PYEOF' > app/src/main/python/pos_server.py
         #!/usr/bin/env python3
         # =========================================================
-        # POS / KITCHEN SYSTEM - VERSION v8.57 (v9.11.09 BUILD)
+        # POS / KITCHEN SYSTEM - VERSION v9.11.09
         # =========================================================
 
         import json, os, threading, socket, urllib.request, datetime
         from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
         from urllib.parse import urlparse
 
+        APP_VERSION = os.environ.get("POS_APP_VERSION") or "v9.11.09"
         PORT = 8080
         TEST_PHONE = "0837869000"
         DIR = os.environ.get("POS_DATA_DIR") or os.path.dirname(os.path.abspath(__file__)) or "/storage/emulated/0/ChowDown_Test"
@@ -338,7 +339,7 @@ jobs:
         <head>
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1">
-          <title>Trailer OS v8.57</title>
+          <title>Trailer OS v9.11.09</title>
           <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
           <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
           <style>
@@ -379,6 +380,7 @@ jobs:
               const [role, setRole] = useState("ORDER");
               const [isServerTab, setIsServerTab] = useState(false);
               const [device, setDevice] = useState("PHONE");
+              const [appVersion, setAppVersion] = useState("v9.11.09");
               const [menu, setMenu] = useState([]);
               const [categories, setCategories] = useState(["CHICKEN", "SIDES", "DOGS", "DRINKS"]);
               const [stock, setStock] = useState({});
@@ -423,6 +425,12 @@ jobs:
 
                 const fetchData = async () => {
                   try {
+                    const vRes = await fetch('/api/version');
+                    if (vRes.ok) {
+                      const vData = await vRes.json();
+                      if (vData && vData.version) setAppVersion(vData.version);
+                    }
+
                     const res = await fetch('/api/orders');
                     if (res.ok) {
                       setOrders(await res.json());
@@ -832,7 +840,7 @@ jobs:
                 React.createElement('div', { className: 'header' },
                   React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
                     React.createElement('h2', { style: { color: '#facc15', margin: 0 } }, storeName.toUpperCase()),
-                    React.createElement('span', { style: { background: '#27272a', padding: '2px 8px', borderRadius: 6, fontSize: 12, color: '#a1a1aa' } }, 'v8.57'),
+                    React.createElement('span', { style: { background: '#27272a', padding: '2px 8px', borderRadius: 6, fontSize: 12, color: '#a1a1aa' } }, appVersion),
                     React.createElement('button', {
                       className: 'btn',
                       onClick: handleReconnect,
@@ -1136,6 +1144,14 @@ jobs:
                     self.wfile.write(HTML_CONTENT.encode('utf-8'))
                     return
 
+                if path == '/api/version':
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"version": APP_VERSION}).encode())
+                    return
+
                 if path == '/api/store_config':
                     self.send_response(200)
                     self.send_header('Content-Type', 'application/json')
@@ -1343,7 +1359,7 @@ jobs:
                 s.close()
             except Exception:
                 ip = "192.168.8.199"
-            print(f"=== SERVER v8.57 ===")
+            print(f"=== SERVER {APP_VERSION} ===")
             print(f"Server running at: http://{ip}:{PORT}/")
             print(f"Dedicated Display link: http://{ip}:{PORT}/display")
             ThreadingHTTPServer(('0.0.0.0', PORT), Handler).serve_forever()
@@ -1832,6 +1848,7 @@ jobs:
                         PyObject osModule = py.getModule("os");
                         PyObject environ = osModule.get("environ");
                         environ.callAttr("__setitem__", "POS_DATA_DIR", dataDir.getAbsolutePath());
+                        environ.callAttr("__setitem__", "POS_APP_VERSION", APP_VERSION);
 
                         if (!pythonStarted) {
                             pythonStarted = true;
