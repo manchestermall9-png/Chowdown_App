@@ -490,7 +490,7 @@ jobs:
                   text += `${resetSize}${i.qty}x ${i.name} @ R${i.price} each = R${i.qty * i.price}\\n`;
                 });
 
-                text += `${boldOn}--------------------------------\\n${resetSize}${bigBoldOn}TOTAL: R${totalVal}\\n${resetSize}${boldOn}================================\\n  Thank You For Eating With Us  \\nPlease collect your order at the trailer.\\n================================\\n\\n\\n${resetSize}`;
+                text += `${boldOn}--------------------------------\\n${resetSize}${bigBoldOn}TOTAL: R${totalVal}\\n${resetSize}${boldOn}================================\\n  Thank You For Eating With Us  \\nPlease collect your order at ${headerName}.\\n================================\\n\\n\\n${resetSize}`;
 
                 const rawUrl = "rawbt:data:text/plain;base64," + btoa(text);
                 window.location.href = rawUrl;
@@ -1198,7 +1198,7 @@ jobs:
                             if data.get('trigger_sms'):
                                 order_num = data.get('num')
                                 st_name = load_store_config().get("store_name", "MY STORE")
-                                sms_msg = f"Hi! Your {st_name} order #{order_num} is READY for collection. Please pick it up at the trailer. Thank you!"
+                                sms_msg = f"Hi! Your {st_name} order #{order_num} is READY for collection. Please pick it up at {st_name}. Thank you!"
                                 res_sms = send_sms(data.get('phone', ''), sms_msg)
                                 sms_sent = bool(res_sms and res_sms.get("ok"))
                                 data.pop('trigger_sms', None)
