@@ -141,12 +141,8 @@ jobs:
             counter = cnt_data.get("counter", 1)
 
         try:
-            existing_phones = []
-            if os.path.exists(F_PHN):
-                with open(F_PHN, "r", encoding="utf-8") as f:
-                    existing_phones = [line.strip() for line in f.readlines()]
-            if TEST_PHONE not in existing_phones:
-                with open(F_PHN, "a", encoding="utf-8") as ph_file:
+            if not os.path.exists(F_PHN):
+                with open(F_PHN, "w", encoding="utf-8") as ph_file:
                     ph_file.write(TEST_PHONE + "\n")
         except Exception:
             pass
@@ -212,7 +208,7 @@ jobs:
         def delete_phone_number(target_phone):
             cleaned_target = clean_phone_number(target_phone)
             if not cleaned_target:
-                return []
+                return get_cleaned_phones()
             remaining = [p for p in get_cleaned_phones() if p != cleaned_target]
             with open(F_PHN, "w", encoding="utf-8") as out:
                 for p in remaining:
@@ -410,6 +406,14 @@ jobs:
               const [selectedPhones, setSelectedPhones] = useState(new Set());
               const [bulkSmsMessage, setBulkSmsMessage] = useState("Check out our latest specials today!");
 
+              const refreshPhones = async () => {
+                const pRes = await fetch('/api/phones');
+                if (pRes.ok) {
+                  const list = await pRes.json();
+                  setPhoneNumbers(Array.isArray(list) ? list : []);
+                }
+              };
+
               useEffect(() => {
                 const hostCheck = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" || window.location.port === "8080";
                 setIsServerTab(hostCheck);
@@ -437,8 +441,7 @@ jobs:
                       setCurrentCounter(cntData.counter);
                     }
 
-                    const pRes = await fetch('/api/phones');
-                    if (pRes.ok) setPhoneNumbers(await pRes.json());
+                    await refreshPhones();
 
                     const salesHistRes = await fetch('/api/daily_sales');
                     if (salesHistRes.ok) setDailySalesHistory(await salesHistRes.json());
@@ -742,12 +745,14 @@ jobs:
                     body: JSON.stringify({ phone })
                   });
                   if (res.ok) {
+                    setIsOnline(true);
                     const data = await res.json();
                     const updatedList = Array.isArray(data.phones) ? data.phones : phoneNumbers.filter(p => p !== phone);
                     setPhoneNumbers(updatedList);
                     const nextSelected = new Set(selectedPhones);
                     nextSelected.delete(phone);
                     setSelectedPhones(nextSelected);
+                    await refreshPhones();
                   } else {
                     alert("Failed to delete phone number.");
                   }
@@ -1064,6 +1069,7 @@ jobs:
                           React.createElement('span', null, phone)
                         ),
                         React.createElement('button', {
+                          type: 'button',
                           className: 'btn btn-red',
                           style: { padding: '6px 12px', fontSize: 12 },
                           onClick: () => handleDeletePhone(phone)
@@ -1479,6 +1485,8 @@ jobs:
         import android.text.InputType;
         import android.view.Gravity;
         import android.view.View;
+        import android.webkit.JsResult;
+        import android.webkit.WebChromeClient;
         import android.webkit.WebResourceRequest;
         import android.webkit.WebSettings;
         import android.webkit.WebView;
@@ -1593,6 +1601,37 @@ jobs:
                 WebSettings settings = webView.getSettings();
                 settings.setJavaScriptEnabled(true);
                 settings.setDomStorageEnabled(true);
+
+                webView.setWebChromeClient(new WebChromeClient() {
+                    @Override
+                    public boolean onJsAlert(WebView view, String url, String message, JsResult result) {
+                        if (isFinishing() || isDestroyed()) {
+                            result.cancel();
+                            return true;
+                        }
+                        new AlertDialog.Builder(MainActivity.this)
+                                .setMessage(message)
+                                .setPositiveButton("OK", (d, w) -> result.confirm())
+                                .setOnCancelListener(d -> result.cancel())
+                                .show();
+                        return true;
+                    }
+
+                    @Override
+                    public boolean onJsConfirm(WebView view, String url, String message, JsResult result) {
+                        if (isFinishing() || isDestroyed()) {
+                            result.cancel();
+                            return true;
+                        }
+                        new AlertDialog.Builder(MainActivity.this)
+                                .setMessage(message)
+                                .setPositiveButton("OK", (d, w) -> result.confirm())
+                                .setNegativeButton("Cancel", (d, w) -> result.cancel())
+                                .setOnCancelListener(d -> result.cancel())
+                                .show();
+                        return true;
+                    }
+                });
 
                 webView.setWebViewClient(new WebViewClient() {
                     @Override
