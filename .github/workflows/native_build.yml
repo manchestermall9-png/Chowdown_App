@@ -371,6 +371,7 @@ jobs:
               const [currentCounter, setCurrentCounter] = useState(1);
               const [lastOrderNum, setLastOrderNum] = useState(null);
               const [isOnline, setIsOnline] = useState(true);
+              const [kitchenStatusMsg, setKitchenStatusMsg] = useState("");
 
               const [storeName, setStoreName] = useState("MY STORE");
               const [storeNameInput, setStoreNameInput] = useState("MY STORE");
@@ -491,11 +492,12 @@ jobs:
                 text += `${boldOn}--------------------------------\\n${resetSize}${bigBoldOn}TOTAL: R${totalVal}\\n${resetSize}${boldOn}================================\\n  Thank You For Eating With Us  \\nPlease collect your order at the trailer.\\n================================\\n\\n\\n${resetSize}`;
 
                 const rawUrl = "rawbt:data:text/plain;base64," + btoa(text);
-                window.location.href = rawUrl;
+                window.location.replace(rawUrl);
               };
 
               const sendOrderToKitchen = async () => {
                 if (cartItems.length === 0) return;
+                setKitchenStatusMsg("");
                 try {
                   const res = await fetch('/api/orders', {
                     method: 'POST',
@@ -504,6 +506,8 @@ jobs:
                   });
                   const jsonRes = await res.json();
                   if (jsonRes.ok) {
+                    const sentMsg = `Order sent to kitchen (Order #${jsonRes.num}).`;
+                    setKitchenStatusMsg(sentMsg);
                     setLastOrderNum(jsonRes.num);
                     setCurrentCounter(jsonRes.num + 1);
                     const sRes = await fetch('/api/stock');
@@ -511,7 +515,7 @@ jobs:
                     setCart({});
                     setCustomerPhone("");
                     setIsOnline(true);
-                    alert(`Order #${jsonRes.num} sent to kitchen!`);
+                    alert(sentMsg);
                   } else {
                     alert(jsonRes.error || 'Server error processing order');
                   }
@@ -801,6 +805,9 @@ jobs:
                       React.createElement('div', { style: { fontWeight: 'bold', fontSize: 16, color: '#fca5a5', marginBottom: 6 } }, '⚠️ WARNING: OFFLINE FROM TAB-8 SERVER'),
                       React.createElement('div', { style: { fontSize: 13, marginBottom: 10 } }, 'Your phone has lost connection to the tablet server. Order numbers may get out of sync if you continue taking orders.'),
                       React.createElement('button', { className: 'btn btn-yellow', onClick: handleReconnect }, '🔄 Reconnect to Last Active Connection')
+                    ),
+                    kitchenStatusMsg && React.createElement('div', { className: 'card', style: { background: '#064e3b', border: '2px solid #10b981', color: '#ecfdf5', fontWeight: 'bold', textAlign: 'center', marginBottom: 15 } },
+                      kitchenStatusMsg
                     ),
                     React.createElement('h3', { style: { color: '#facc15' } }, 'Menu & Ordering (Next: #' + currentCounter + ')'),
                     menu.map(item => React.createElement('div', { key: item.id, className: 'card', style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
@@ -1302,6 +1309,7 @@ jobs:
             repositories {
                 google()
                 mavenCentral()
+                gradlePluginPortal()
                 maven { url 'https://chaquo.com/maven' }
             }
             dependencies {
@@ -1313,6 +1321,7 @@ jobs:
             repositories {
                 google()
                 mavenCentral()
+                gradlePluginPortal()
                 maven { url 'https://chaquo.com/maven' }
             }
         }
@@ -1635,7 +1644,7 @@ jobs:
             private boolean handleRawbtUrl(String url) {
                 if (url != null && url.startsWith("rawbt:")) {
                     long now = android.os.SystemClock.elapsedRealtime();
-                    if (url.equals(lastRawbtUrl) && (now - lastRawbtTimeMs) < 2500L) {
+                    if (url.equals(lastRawbtUrl) && (now - lastRawbtTimeMs) < 4000L) {
                         return true;
                     }
                     lastRawbtUrl = url;
