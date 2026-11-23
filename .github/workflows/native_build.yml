@@ -367,6 +367,7 @@ jobs:
             .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
             @media(max-width: 768px) { .grid { grid-template-columns: 1fr; } }
             .receipt { background: #fef08a; color: #000; font-family: monospace; padding: 16px; border-radius: 8px; margin-bottom: 15px; }
+            .receipt-phone { font-weight: 800; font-size: 1.1em; }
             .columns-grid{display:grid;grid-template-columns:repeat(3, 1fr);gap:12px}
             .col{border-radius:12px;padding:12px;min-height:60vh}
             .received-col{background:#ffffff;color:#000000;border:1px solid #e4e4e7}
@@ -499,6 +500,10 @@ jobs:
                 }
               };
 
+              const openApkInstaller = () => {
+                window.location.href = "posapp://installer";
+              };
+
               const cartItems = useMemo(() => {
                 return Object.entries(cart).filter(([id, qty]) => qty > 0).map(([id, qty]) => {
                   const item = menu.find(m => m.id === id);
@@ -517,13 +522,14 @@ jobs:
 
                 const ESC = '\\x1b';
                 const bigBoldOn = ESC + '!' + '\\x38';
+                const phoneBoldBiggerOn = ESC + '!' + '\\x10';
                 const boldOn = ESC + 'E' + '\\x01';
                 const resetSize = ESC + '!' + '\\x00';
 
                 let text = `${bigBoldOn}      ORDER #${orderNum}\\n${resetSize}`;
 
                 if (phoneVal && phoneVal.trim() !== '') {
-                  text += `${resetSize}CELL: ${phoneVal.trim()}\\n`;
+                  text += `${phoneBoldBiggerOn}CELL: ${phoneVal.trim()}\\n${resetSize}`;
                 }
 
                 text += `${boldOn}================================\\n       ${headerName}       \\n================================\\n${resetSize}Date: ${dateStr} | Time: ${timeStr} | Device: ${device}\\n--------------------------------\\n`;
@@ -873,7 +879,8 @@ jobs:
                     isServerTab && React.createElement('button', { className: 'btn ' + (role === 'DISPLAY' ? 'btn-yellow' : 'btn-zinc'), onClick: () => setRole('DISPLAY') }, '📺 DISPLAY'),
                     isServerTab && React.createElement('button', { className: 'btn ' + (role === 'SETUP' ? 'btn-yellow' : 'btn-zinc'), onClick: () => setRole('SETUP') }, '⚙️ SETUP'),
                     React.createElement('button', { className: 'btn ' + (role === 'STOCK' ? 'btn-yellow' : 'btn-zinc'), onClick: () => setRole('STOCK') }, 'STOCK'),
-                    React.createElement('button', { className: 'btn ' + (role === 'NUMBERS' ? 'btn-yellow' : 'btn-zinc'), onClick: () => setRole('NUMBERS') }, '📱 NUMBERS')
+                    React.createElement('button', { className: 'btn ' + (role === 'NUMBERS' ? 'btn-yellow' : 'btn-zinc'), onClick: () => setRole('NUMBERS') }, '📱 NUMBERS'),
+                    isServerTab && React.createElement('button', { className: 'btn btn-blue', onClick: openApkInstaller }, '⬇️ INSTALLER')
                   )
                 ),
                 React.createElement('div', { className: 'container' },
@@ -903,7 +910,7 @@ jobs:
                       React.createElement('input', { type: 'tel', placeholder: 'e.g. 082 123 4567', value: customerPhone, onChange: e => setCustomerPhone(e.target.value) }),
                       React.createElement('div', { className: 'receipt' },
                         React.createElement('div', { style: { fontWeight: 'bold' } }, storeName.toUpperCase() + ' — ORDER #' + activeOrderNumDisplay),
-                        customerPhone && React.createElement('div', null, 'Phone: ' + customerPhone),
+                        customerPhone && React.createElement('div', { className: 'receipt-phone' }, 'Phone: ' + customerPhone),
                         cartItems.map((ci, idx) => React.createElement('div', { key: idx }, ci.qty + 'x ' + ci.name + ' - R' + (ci.qty * ci.price))),
                         React.createElement('div', { style: { fontWeight: 'bold', marginTop: 6 } }, 'TOTAL: R' + totalAmount)
                       ),
@@ -924,6 +931,11 @@ jobs:
                     ))
                   ) : role === 'SETUP' && isServerTab ? React.createElement('div', null,
                     React.createElement('h3', { style: { color: '#facc15' } }, 'Setup & Administrative Controls'),
+                    React.createElement('div', { className: 'card' },
+                      React.createElement('h4', { style: { color: '#facc15', margin: '0 0 10px 0' } }, 'APK Downloader & Installer Screen'),
+                      React.createElement('p', { style: { color: '#a1a1aa', fontSize: 14 } }, 'Opens the APK Installer screen with a visible spinner and post-install status.'),
+                      React.createElement('button', { className: 'btn btn-blue', style: { width: '100%' }, onClick: openApkInstaller }, '⬇️ Open APK Installer Screen')
+                    ),
                     React.createElement('div', { className: 'card' },
                       React.createElement('h4', { style: { color: '#facc15', margin: '0 0 10px 0' } }, 'Invoice & Store Name'),
                       React.createElement('form', { onSubmit: handleSaveStoreConfig },
@@ -1491,6 +1503,12 @@ jobs:
                         <category android:name="android.intent.category.DEFAULT" />
                         <data android:mimeType="application/vnd.android.package-archive" />
                     </intent-filter>
+                    <intent-filter>
+                        <action android:name="android.intent.action.VIEW" />
+                        <category android:name="android.intent.category.DEFAULT" />
+                        <category android:name="android.intent.category.BROWSABLE" />
+                        <data android:scheme="posapp" android:host="installer" />
+                    </intent-filter>
                 </activity>
 
                 <activity
@@ -1566,7 +1584,7 @@ jobs:
             private Button backButton;
 
             private volatile boolean waitingForInstallerReturn = false;
-            private String targetPackage = MainActivity.APP_VERSION != null ? "org.chowdown.pos" : "org.chowdown.pos";
+            private String targetPackage = "org.chowdown.pos";
 
             @Override
             protected void onCreate(Bundle savedInstanceState) {
@@ -1632,7 +1650,7 @@ jobs:
                 root.addView(statusTitle, titleParams);
 
                 statusDetail = new TextView(this);
-                statusDetail.setText("Enter an APK download URL or install a downloaded APK file.");
+                statusDetail.setText("Enter an APK download URL or tap Download & Install APK.");
                 statusDetail.setTextColor(Color.parseColor("#D4D4D8"));
                 statusDetail.setTextSize(14f);
                 statusDetail.setGravity(Gravity.CENTER);
@@ -1714,7 +1732,7 @@ jobs:
                 openAppButton.setVisibility(View.GONE);
                 setBusyState(
                         "Downloading APK...",
-                        "Please keep this screen open while the APK downloads.",
+                        "Stay on screen while the APK downloads.",
                         true
                 );
 
@@ -1805,7 +1823,7 @@ jobs:
                     waitingForInstallerReturn = true;
                     setBusyState(
                             "Installing APK...",
-                            "Complete the Android install prompt. We will confirm when you return here.",
+                            "Stay on screen while Android install prompts run.",
                             true
                     );
                     startActivity(installIntent);
@@ -2054,12 +2072,12 @@ jobs:
                 webView.setWebViewClient(new WebViewClient() {
                     @Override
                     public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                        return handleRawbtUrl(request.getUrl() != null ? request.getUrl().toString() : "");
+                        return handleCustomSchemeUrl(request.getUrl() != null ? request.getUrl().toString() : "");
                     }
 
                     @Override
                     public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                        return handleRawbtUrl(url);
+                        return handleCustomSchemeUrl(url);
                     }
 
                     @Override
@@ -2087,8 +2105,8 @@ jobs:
                     @Override
                     public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
                         super.onReceivedError(view, errorCode, description, failingUrl);
-                        if (failingUrl != null && failingUrl.startsWith("rawbt:")) {
-                            handleRawbtUrl(failingUrl);
+                        if (failingUrl != null && (failingUrl.startsWith("rawbt:") || failingUrl.startsWith("posapp:"))) {
+                            handleCustomSchemeUrl(failingUrl);
                             return;
                         }
                         if (!pythonReady) {
@@ -2165,7 +2183,7 @@ jobs:
                 );
             }
 
-            private boolean handleRawbtUrl(String url) {
+            private boolean handleCustomSchemeUrl(String url) {
                 if (url != null && url.startsWith("rawbt:")) {
                     try {
                         Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
@@ -2176,6 +2194,19 @@ jobs:
                                 this,
                                 "Please install and open RawBT to print receipts.",
                                 Toast.LENGTH_LONG
+                        ).show();
+                    }
+                    return true;
+                }
+                if (url != null && url.startsWith("posapp://installer")) {
+                    try {
+                        Intent intent = new Intent(this, ApkInstallerActivity.class);
+                        startActivity(intent);
+                    } catch (Exception e) {
+                        Toast.makeText(
+                                this,
+                                "Could not open APK Installer.",
+                                Toast.LENGTH_SHORT
                         ).show();
                     }
                     return true;
