@@ -30,7 +30,7 @@ jobs:
       with:
         gradle-version: '8.5'
 
-    - name: Generate Project Structure & Copy v9.11.05 Files
+    - name: Generate Project Structure & Copy v9.11.06 Files
       run: |
         mkdir -p app/src/main/java/org/chowdown/pos
         mkdir -p app/src/main/python
@@ -46,6 +46,23 @@ jobs:
         elif [ -f v8.7.py ]; then
           cp -f v8.7.py app/src/main/python/pos_server.py
         fi
+
+        python3 - << 'PYEOF'
+        path = "app/src/main/python/pos_server.py"
+        with open(path, "r", encoding="utf-8") as f:
+            code = f.read()
+
+        old_dir = 'DIR = os.path.dirname(os.path.abspath(__file__)) or "/storage/emulated/0/ChowDown_Test"'
+        new_dir = 'DIR = os.environ.get("POS_DATA_DIR") or "/data/user/0/org.chowdown.pos/files/pos_data"'
+        if old_dir in code:
+            code = code.replace(old_dir, new_dir, 1)
+
+        code = code.replace('if __name__ == "__main__":', 'if __name__ in ("__main__", "pos_server"):')
+        code = code.replace("if __name__ == '__main__':", 'if __name__ in ("__main__", "pos_server"):')
+
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(code)
+        PYEOF
 
         cat << 'EOF' > gradle.properties
         android.useAndroidX=true
@@ -106,8 +123,8 @@ jobs:
                 applicationId "org.chowdown.pos"
                 minSdk 24
                 targetSdk 34
-                versionCode 91105
-                versionName "9.11.05"
+                versionCode 91106
+                versionName "9.11.06"
 
                 ndk {
                     abiFilters "arm64-v8a", "x86_64"
@@ -213,6 +230,7 @@ jobs:
         import org.json.JSONArray;
         import org.json.JSONObject;
 
+        import java.io.File;
         import java.io.OutputStream;
         import java.net.InetSocketAddress;
         import java.net.Socket;
@@ -231,7 +249,7 @@ jobs:
 
         public class MainActivity extends AppCompatActivity {
 
-            public static final String APP_VERSION = "v9.11.05";
+            public static final String APP_VERSION = "v9.11.06";
             private static final UUID SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
             private static final String PRINTER_PREFS = "pos_printer_prefs";
             private static final String KEY_SAVED_PRINTER_MAC = "saved_printer_mac";
@@ -240,7 +258,7 @@ jobs:
             private static final int LOCAL_PORT = 8080;
 
             private final ExecutorService printExecutor = Executors.newSingleThreadExecutor();
-            private final ExecutorService pythonExecutor = Executors.newSingleThreadExecutor();
+            private final ExecutorService pythonExecutor = Executors.newCachedThreadPool();
             private final Handler mainHandler = new Handler(Looper.getMainLooper());
             private volatile boolean pythonStarted = false;
             private volatile boolean pythonReady = false;
@@ -487,28 +505,46 @@ jobs:
                 showLoadingSpinner("Starting local POS server, please wait...", false);
 
                 pythonExecutor.execute(() -> {
+                    final String[] startupError = new String[]{null};
                     try {
                         showLoadingSpinner("Initializing Python engine...", false);
                         if (!Python.isStarted()) {
                             Python.start(new AndroidPlatform(getApplicationContext()));
                         }
 
+                        File dataDir = new File(getFilesDir(), "pos_data");
+                        if (!dataDir.exists()) {
+                            dataDir.mkdirs();
+                        }
+
+                        Python py = Python.getInstance();
+                        PyObject osModule = py.getModule("os");
+                        PyObject environ = osModule.get("environ");
+                        environ.callAttr("__setitem__", "POS_DATA_DIR", dataDir.getAbsolutePath());
+
                         if (!pythonStarted) {
-                            showLoadingSpinner("Starting POS server, please wait...", false);
-                            Python py = Python.getInstance();
-                            PyObject module = py.getModule("pos_server");
-                            if (module.containsKey("start_server")) {
-                                module.callAttr("start_server");
-                            } else if (module.containsKey("run_server")) {
-                                module.callAttr("run_server");
-                            } else if (module.containsKey("main")) {
-                                module.callAttr("main");
-                            }
                             pythonStarted = true;
+                            pythonExecutor.execute(() -> {
+                                try {
+                                    PyObject module = py.getModule("pos_server");
+                                    if (module.containsKey("start_server")) {
+                                        module.callAttr("start_server");
+                                    } else if (module.containsKey("run_server")) {
+                                        module.callAttr("run_server");
+                                    } else if (module.containsKey("main")) {
+                                        module.callAttr("main");
+                                    }
+                                } catch (Throwable t) {
+                                    startupError[0] = t.getMessage() != null ? t.getMessage() : t.toString();
+                                }
+                            });
                         }
 
                         boolean portListening = false;
                         for (int attempt = 0; attempt < 30; attempt++) {
+                            if (startupError[0] != null) {
+                                break;
+                            }
                             if (isPortOpen("127.0.0.1", LOCAL_PORT)) {
                                 portListening = true;
                                 break;
@@ -518,10 +554,11 @@ jobs:
 
                         if (!portListening) {
                             pythonReady = false;
-                            showLoadingSpinner(
-                                    "Local server did not start on port " + LOCAL_PORT + ". Check Python server startup in pos_server.py.",
-                                    true
-                            );
+                            pythonStarted = false;
+                            String detail = startupError[0] != null
+                                    ? "Python error: " + startupError[0]
+                                    : "Local server did not start on port " + LOCAL_PORT + ".";
+                            showLoadingSpinner(detail, true);
                             return;
                         }
 
@@ -533,9 +570,11 @@ jobs:
                             }
                         });
                     } catch (PyException pyEx) {
+                        pythonStarted = false;
                         final String err = pyEx.getMessage() != null ? pyEx.getMessage() : "Python error";
                         showLoadingSpinner("Python startup error: " + err, true);
                     } catch (Exception ex) {
+                        pythonStarted = false;
                         final String err = ex.getMessage() != null ? ex.getMessage() : "Failed to start Python";
                         showLoadingSpinner("Startup error: " + err, true);
                     }
@@ -994,11 +1033,11 @@ jobs:
         }
         EOF
 
-    - name: Build Installable v9.11.05 APK
+    - name: Build Installable v9.11.06 APK
       run: gradle assembleDebug --no-daemon
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ChowDownPOS_v9.11.05_APK
+        name: ChowDownPOS_v9.11.06_APK
         path: app/build/outputs/apk/debug/*.apk
