@@ -468,31 +468,32 @@ jobs:
               const activeOrderNumDisplay = lastOrderNum || currentCounter;
 
               const triggerPrint = (orderNum, itemsList, totalVal, phoneVal) => {
-                const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const now = new Date();
+                const dateStr = now.toLocaleDateString([], { year: 'numeric', month: '2-digit', day: '2-digit' });
+                const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                 const headerName = (storeName || "MY STORE").toUpperCase();
 
                 const ESC = '\\x1b';
                 const bigBoldOn = ESC + '!' + '\\x38';
-                const twiceBoldOn = ESC + '!' + '\\x10';
                 const boldOn = ESC + 'E' + '\\x01';
                 const resetSize = ESC + '!' + '\\x00';
 
                 let text = `${bigBoldOn}      ORDER #${orderNum}\\n${resetSize}`;
 
                 if (phoneVal && phoneVal.trim() !== '') {
-                  text += `${twiceBoldOn}    CELL: ${phoneVal.trim()}\\n${resetSize}`;
+                  text += `${resetSize}CELL: ${phoneVal.trim()}\\n`;
                 }
 
-                text += `${boldOn}================================\\n       ${headerName}       \\n================================\\nTime: ${timeStr} | Device: ${device}\\n--------------------------------\\n${resetSize}`;
+                text += `${boldOn}================================\\n       ${headerName}       \\n================================\\n${resetSize}Date: ${dateStr} | Time: ${timeStr} | Device: ${device}\\n--------------------------------\\n`;
 
                 itemsList.forEach(i => {
-                  text += `${twiceBoldOn}${i.qty}x ${i.name}\\n   @ R${i.price} each = R${i.qty * i.price}\\n${resetSize}`;
+                  text += `${resetSize}${i.qty}x ${i.name} @ R${i.price} each = R${i.qty * i.price}\\n`;
                 });
 
                 text += `${boldOn}--------------------------------\\n${resetSize}${bigBoldOn}TOTAL: R${totalVal}\\n${resetSize}${boldOn}================================\\n  Thank You For Eating With Us  \\nPlease collect your order at the trailer.\\n================================\\n\\n\\n${resetSize}`;
 
                 const rawUrl = "rawbt:data:text/plain;base64," + btoa(text);
-                window.location.replace(rawUrl);
+                window.location.href = rawUrl;
               };
 
               const sendOrderToKitchen = async () => {
@@ -667,7 +668,7 @@ jobs:
                 if (categories.includes(formatted)) return alert("Category already exists");
                 const newCats = [...categories, formatted];
                 try {
-                  await fetch('/api/categories', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(newCats) });
+                  await fetch('/api/categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newCats) });
                   setCategories(newCats); setNewCategoryName("");
                   alert("Category added!");
                 } catch(e) { alert("Failed to add category."); }
@@ -1457,8 +1458,6 @@ jobs:
             private TextView loadingText;
             private Button retryButton;
             private WebView webView;
-            private String lastRawbtUrl = "";
-            private long lastRawbtTimeMs = 0L;
 
             @Override
             protected void onCreate(Bundle savedInstanceState) {
@@ -1643,12 +1642,6 @@ jobs:
 
             private boolean handleRawbtUrl(String url) {
                 if (url != null && url.startsWith("rawbt:")) {
-                    long now = android.os.SystemClock.elapsedRealtime();
-                    if (url.equals(lastRawbtUrl) && (now - lastRawbtTimeMs) < 4000L) {
-                        return true;
-                    }
-                    lastRawbtUrl = url;
-                    lastRawbtTimeMs = now;
                     try {
                         Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
                         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
