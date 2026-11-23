@@ -30,7 +30,7 @@ jobs:
       with:
         gradle-version: '8.5'
 
-    - name: Generate Project Structure & Copy v9.11.08 Files
+    - name: Generate Project Structure & Copy v9.11.09 Files
       run: |
         mkdir -p app/src/main/java/org/chowdown/pos
         mkdir -p app/src/main/python
@@ -48,6 +48,8 @@ jobs:
         fi
 
         python3 - << 'PYEOF'
+        import re
+
         path = "app/src/main/python/pos_server.py"
         with open(path, "r", encoding="utf-8") as f:
             code = f.read()
@@ -99,10 +101,16 @@ jobs:
         if anchor in code and "def get_active_winsms_key():" not in code:
             code = code.replace(anchor, sms_helper + "\n" + anchor, 1)
 
-        code = code.replace(
-            "req.add_header('AUTHORIZATION', WINSMS_KEY)",
-            "active_key = get_active_winsms_key()\n                if not active_key:\n                    return\n                req.add_header('AUTHORIZATION', active_key)"
-        )
+        pattern = re.compile(r"^([ \t]*)req\.add_header\(['\"]AUTHORIZATION['\"],\s*WINSMS_KEY\)\s*$", re.MULTILINE)
+        def repl(match):
+            indent = match.group(1)
+            return (
+                f"{indent}active_key = get_active_winsms_key()\n"
+                f"{indent}if not active_key:\n"
+                f"{indent}    return\n"
+                f"{indent}req.add_header('AUTHORIZATION', active_key)"
+            )
+        code = pattern.sub(repl, code, count=1)
 
         code = code.replace('if __name__ == "__main__":', 'if __name__ in ("__main__", "pos_server"):')
         code = code.replace("if __name__ == '__main__':", 'if __name__ in ("__main__", "pos_server"):')
@@ -170,8 +178,8 @@ jobs:
                 applicationId "org.chowdown.pos"
                 minSdk 24
                 targetSdk 34
-                versionCode 91108
-                versionName "9.11.08"
+                versionCode 91109
+                versionName "9.11.09"
 
                 ndk {
                     abiFilters "arm64-v8a", "x86_64"
@@ -274,7 +282,7 @@ jobs:
 
         public class MainActivity extends AppCompatActivity {
 
-            public static final String APP_VERSION = "v9.11.08";
+            public static final String APP_VERSION = "v9.11.09";
             private static final int LOCAL_PORT = 8080;
 
             private final ExecutorService pythonExecutor = Executors.newCachedThreadPool();
@@ -792,11 +800,11 @@ jobs:
         }
         EOF
 
-    - name: Build Installable v9.11.08 APK
+    - name: Build Installable v9.11.09 APK
       run: gradle assembleDebug --no-daemon
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ChowDownPOS_v9.11.08_APK
+        name: ChowDownPOS_v9.11.09_APK
         path: app/build/outputs/apk/debug/*.apk
