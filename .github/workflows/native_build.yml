@@ -49,6 +49,7 @@ jobs:
 
         python3 - << 'PYEOF'
         import re
+        import time
 
         path = "app/src/main/python/pos_server.py"
         with open(path, "r", encoding="utf-8") as f:
@@ -59,8 +60,18 @@ jobs:
         if old_dir in code:
             code = code.replace(old_dir, new_dir, 1)
 
-        sms_helper = '''
+        # Clear any hardcoded personal WinSMS key so new users must provide their own
+        code = re.sub(
+            r'^(WINSMS_KEY\s*=\s*)["\'].*["\']\s*$',
+            r'\1""',
+            code,
+            flags=re.MULTILINE
+        )
+
+        config_helpers = '''
         F_SMS = os.path.join(DIR, "sms_config.json")
+        F_STORE = os.path.join(DIR, "store_config.json")
+        _LAST_PRINT_SIGNATURE = {"sig": "", "ts": 0.0}
 
         def load_sms_config():
             cfg = {"sms_enabled": False, "winsms_key": ""}
@@ -73,14 +84,19 @@ jobs:
                             cfg["winsms_key"] = str(loaded.get("winsms_key", "") or "").strip()
             except Exception:
                 pass
+            if not cfg["winsms_key"]:
+                cfg["sms_enabled"] = False
             return cfg
 
         def save_sms_config(sms_enabled, winsms_key):
+            clean_key = str(winsms_key or "").strip()
+            enabled = bool(sms_enabled) and bool(clean_key)
             cfg = {
-                "sms_enabled": bool(sms_enabled),
-                "winsms_key": str(winsms_key or "").strip()
+                "sms_enabled": enabled,
+                "winsms_key": clean_key
             }
             try:
+                os.makedirs(DIR, exist_ok=True)
                 with open(F_SMS, "w", encoding="utf-8") as f:
                     json.dump(cfg, f)
             except Exception:
@@ -91,15 +107,49 @@ jobs:
             cfg = load_sms_config()
             if not cfg.get("sms_enabled"):
                 return ""
-            key = str(cfg.get("winsms_key") or "").strip()
-            if key:
-                return key
-            return globals().get("WINSMS_KEY", "")
+            return str(cfg.get("winsms_key") or "").strip()
+
+        def load_store_config():
+            cfg = {"store_name": "MY STORE"}
+            try:
+                if os.path.exists(F_STORE):
+                    with open(F_STORE, "r", encoding="utf-8") as f:
+                        loaded = json.load(f)
+                        if isinstance(loaded, dict):
+                            name = str(loaded.get("store_name", "") or "").strip()
+                            if name:
+                                cfg["store_name"] = name
+            except Exception:
+                pass
+            return cfg
+
+        def save_store_config(store_name):
+            clean_name = str(store_name or "").strip() or "MY STORE"
+            cfg = {"store_name": clean_name}
+            try:
+                os.makedirs(DIR, exist_ok=True)
+                with open(F_STORE, "w", encoding="utf-8") as f:
+                    json.dump(cfg, f)
+            except Exception:
+                pass
+            return cfg
+
+        def should_allow_print(payload_key, window_sec=3.0):
+            import time as _time
+            now = _time.monotonic()
+            sig = str(payload_key or "").strip()
+            if not sig:
+                return True
+            if _LAST_PRINT_SIGNATURE["sig"] == sig and (now - _LAST_PRINT_SIGNATURE["ts"]) < window_sec:
+                return False
+            _LAST_PRINT_SIGNATURE["sig"] = sig
+            _LAST_PRINT_SIGNATURE["ts"] = now
+            return True
         '''
 
         anchor = "def send_sms(phone, msg):"
         if anchor in code and "def get_active_winsms_key():" not in code:
-            code = code.replace(anchor, sms_helper + "\n" + anchor, 1)
+            code = code.replace(anchor, config_helpers + "\n" + anchor, 1)
 
         pattern = re.compile(r"^([ \t]*)req\.add_header\(['\"]AUTHORIZATION['\"],\s*WINSMS_KEY\)\s*$", re.MULTILINE)
         def repl(match):
@@ -296,6 +346,8 @@ jobs:
             private TextView loadingText;
             private Button retryButton;
             private WebView webView;
+            private String lastRawbtUrl = "";
+            private long lastRawbtTimeMs = 0L;
 
             @Override
             protected void onCreate(Bundle savedInstanceState) {
@@ -480,6 +532,12 @@ jobs:
 
             private boolean handleRawbtUrl(String url) {
                 if (url != null && url.startsWith("rawbt:")) {
+                    long now = android.os.SystemClock.elapsedRealtime();
+                    if (url.equals(lastRawbtUrl) && (now - lastRawbtTimeMs) < 2500L) {
+                        return true;
+                    }
+                    lastRawbtUrl = url;
+                    lastRawbtTimeMs = now;
                     try {
                         Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
                         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
