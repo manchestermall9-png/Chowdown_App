@@ -7,6 +7,11 @@ on:
 
 env:
   LICENSE_PEPPER: ${{ secrets.LICENSE_PEPPER }}
+  KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+  KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+  KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+  KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+  RELEASE_KEYSTORE_PATH: app/release.jks
 
 jobs:
   build:
@@ -33,7 +38,7 @@ jobs:
       with:
         gradle-version: '8.5'
 
-    - name: Generate Project Structure & Copy v9.11.11 Files
+    - name: Generate Project Structure & Copy v9.11.12 Files
       run: |
         mkdir -p app/src/main/java/org/chowdown/pos
         mkdir -p app/src/main/python
@@ -47,14 +52,14 @@ jobs:
         cat << 'PYEOF' > app/src/main/python/pos_server.py
         #!/usr/bin/env python3
         # =========================================================
-        # POS / KITCHEN SYSTEM - VERSION v9.11.11
+        # POS / KITCHEN SYSTEM - VERSION v9.11.12
         # =========================================================
 
         import json, os, threading, socket, urllib.request, datetime
         from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
         from urllib.parse import urlparse
 
-        APP_VERSION = os.environ.get("POS_APP_VERSION") or "v9.11.11"
+        APP_VERSION = os.environ.get("POS_APP_VERSION") or "v9.11.12"
         PORT = 8080
         DIR = os.environ.get("POS_DATA_DIR") or os.path.dirname(os.path.abspath(__file__)) or "/storage/emulated/0/ChowDown_Test"
         os.makedirs(DIR, exist_ok=True)
@@ -339,7 +344,7 @@ jobs:
         <head>
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1">
-          <title>Trailer OS v9.11.11</title>
+          <title>Trailer OS v9.11.12</title>
           <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
           <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
           <style>
@@ -381,7 +386,7 @@ jobs:
               const [role, setRole] = useState("ORDER");
               const [isServerTab, setIsServerTab] = useState(false);
               const [device, setDevice] = useState("PHONE");
-              const [appVersion, setAppVersion] = useState("v9.11.11");
+              const [appVersion, setAppVersion] = useState("v9.11.12");
               const [menu, setMenu] = useState([]);
               const [categories, setCategories] = useState(["CHICKEN", "SIDES", "DOGS", "DRINKS"]);
               const [stock, setStock] = useState({});
@@ -1390,7 +1395,7 @@ jobs:
                 maven { url 'https://chaquo.com/maven' }
             }
         }
-        rootProject.name = "ChowDownPOS"
+        rootProject.name = "VendorPOS"
         include ':app'
         EOF
 
@@ -1429,23 +1434,38 @@ jobs:
                 applicationId "org.chowdown.pos"
                 minSdk 24
                 targetSdk 34
-                versionCode 91111
-                versionName "9.11.11"
+                versionCode 91112
+                versionName "9.11.12"
                 buildConfigField "String", "LICENSE_PEPPER", "\"${System.getenv("LICENSE_PEPPER") ?: "DEFAULT_CHANGE_IN_GITHUB_SECRETS"}\""
 
                 ndk {
                     abiFilters "arm64-v8a", "x86_64"
                 }
             }
+
+            signingConfigs {
+                release {
+                    def storeFilePath = System.getenv("RELEASE_KEYSTORE_PATH")
+                    if (storeFilePath) {
+                        storeFile file(storeFilePath)
+                        storePassword System.getenv("KEYSTORE_PASSWORD") ?: ""
+                        keyAlias System.getenv("KEY_ALIAS") ?: ""
+                        keyPassword System.getenv("KEY_PASSWORD") ?: ""
+                    }
+                }
+            }
+
             buildFeatures {
                 buildConfig true
             }
+
             buildTypes {
                 debug {
                     minifyEnabled false
                 }
                 release {
                     minifyEnabled true
+                    signingConfig signingConfigs.release
                     proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
                 }
             }
@@ -1539,7 +1559,7 @@ jobs:
 
         public class MainActivity extends AppCompatActivity {
 
-            public static final String APP_VERSION = "v9.11.11";
+            public static final String APP_VERSION = "v9.11.12";
             private static final int LOCAL_PORT = 8080;
 
             private final ExecutorService pythonExecutor = Executors.newCachedThreadPool();
@@ -2090,11 +2110,16 @@ jobs:
         }
         EOF
 
-    - name: Build Release v9.11.11 APK
+    - name: Decode Release Keystore
+      if: env.KEYSTORE_BASE64 != ''
+      run: |
+        echo "$KEYSTORE_BASE64" | base64 -d > app/release.jks
+
+    - name: Build Signed Release v9.11.12 APK
       run: gradle assembleRelease --no-daemon
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ChowDownPOS_v9.11.11_APK
+        name: VendorPOS_v9.11.12_APK
         path: app/build/outputs/apk/release/*.apk
