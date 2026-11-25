@@ -1944,8 +1944,9 @@ jobs:
                 private static final String KEY_SAVED_LICENSE = "saved_license_key";
                 private static final String KEY_LAST_SEEN_DATE = "last_seen_date_yyyymmdd";
                 private static final String[] WHITELISTED_DEVICE_IDS = {
-                        "e65012f256e4264b",
                         "Bddb4abb6d76b0e8"
+                };
+
                 };
 
                 public static class ValidationResult {
