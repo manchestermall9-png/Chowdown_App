@@ -1947,8 +1947,6 @@ jobs:
                         "Bddb4abb6d76b0e8"
                 };
 
-                };
-
                 public static class ValidationResult {
                     public final boolean valid;
                     public final String message;
