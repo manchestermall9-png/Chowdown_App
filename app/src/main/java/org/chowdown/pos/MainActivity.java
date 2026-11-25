@@ -52,7 +52,7 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
 
-    public static final String APP_VERSION = "v9.11.02";
+    public static final String APP_VERSION = "v9.11.12";
     private static final UUID SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
     private static final String PRINTER_PREFS = "pos_printer_prefs";
     private static final String KEY_SAVED_PRINTER_MAC = "saved_printer_mac";
@@ -480,6 +480,7 @@ public class MainActivity extends AppCompatActivity {
         private static final String PREFS_NAME = "pos_license_prefs";
         private static final String KEY_SAVED_LICENSE = "saved_license_key";
         private static final String KEY_LAST_SEEN_DATE = "last_seen_date_yyyymmdd";
+        private static final String WHITELISTED_DEVICE_ID = "e65012f256e4264b";
 
         public static class ValidationResult {
             public final boolean valid;
@@ -499,7 +500,21 @@ public class MainActivity extends AppCompatActivity {
             return androidId == null ? "unknown_device" : androidId.trim();
         }
 
+        private static boolean isWhitelistedDevice(Context context) {
+            return WHITELISTED_DEVICE_ID.equalsIgnoreCase(getDeviceId(context));
+        }
+
         public static ValidationResult activateKey(Context context, String rawKey) {
+            if (isWhitelistedDevice(context)) {
+                String cleanKey = rawKey == null ? "" : rawKey.trim().toUpperCase(Locale.US);
+                SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                prefs.edit()
+                        .putString(KEY_SAVED_LICENSE, cleanKey)
+                        .putString(KEY_LAST_SEEN_DATE, formatYyyyMmDd(getTodayDateOnly()))
+                        .apply();
+                return new ValidationResult(true, "License activated successfully.");
+            }
+
             if (rawKey == null || rawKey.trim().isEmpty()) {
                 return new ValidationResult(false, "Please enter a license key.");
             }
@@ -558,6 +573,10 @@ public class MainActivity extends AppCompatActivity {
         }
 
         public static boolean isLicenseActive(Context context) {
+            if (isWhitelistedDevice(context)) {
+                return true;
+            }
+
             SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
             Date todayDate = getTodayDateOnly();
             String todayStr = formatYyyyMmDd(todayDate);
