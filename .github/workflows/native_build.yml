@@ -1,197 +1,2214 @@
-        public static class LicenseManager {
-            private static final String PREFS_NAME = "pos_license_prefs";
-            private static final String KEY_SAVED_LICENSE = "saved_license_key";
-            private static final String KEY_LAST_SEEN_DATE = "last_seen_date_yyyymmdd";
-            private static final String[] WHITELISTED_DEVICE_IDS = {
-                    "e65012f256e4264b",
-                    "Bddb4abb6d76b0e8"
-            };
+name: Native Android Build
 
-            public static class ValidationResult {
-                public final boolean valid;
-                public final String message;
+on:
+  push:
+    branches: [ main, master, Commercial4 ]
+  workflow_dispatch:
 
-                public ValidationResult(boolean valid, String message) {
-                    this.valid = valid;
-                    this.message = message;
-                }
-            }
+env:
+  LICENSE_PEPPER: ${{ secrets.LICENSE_PEPPER }}
+  KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+  KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+  KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+  KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+  RELEASE_KEYSTORE_PATH: app/release.jks
 
-            public static String getDeviceId(Context context) {
-                String androidId = Settings.Secure.getString(
-                        context.getContentResolver(),
-                        Settings.Secure.ANDROID_ID
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+          accept-android-sdk-licenses: true
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.5'
+
+      - name: Generate Project Structure & Copy v9.11.12 Files
+        run: |
+          mkdir -p app/src/main/java/org/chowdown/pos
+          mkdir -p app/src/main/python
+          mkdir -p app/src/main/res/values
+          mkdir -p app/src/main/assets
+
+          cp -f *.html app/src/main/assets/ 2>/dev/null || true
+          cp -f *.json app/src/main/assets/ 2>/dev/null || true
+          cp -f *.txt app/src/main/assets/ 2>/dev/null || true
+
+          cat << 'PYEOF' > app/src/main/python/pos_server.py
+          #!/usr/bin/env python3
+          # =========================================================
+          # POS / KITCHEN SYSTEM - VERSION v9.11.12
+          # =========================================================
+
+          import json, os, threading, socket, urllib.request, datetime
+          from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+          from urllib.parse import urlparse
+
+          APP_VERSION = os.environ.get("POS_APP_VERSION") or "v9.11.12"
+          PORT = 8080
+          DIR = os.environ.get("POS_DATA_DIR") or os.path.dirname(os.path.abspath(__file__)) or "/storage/emulated/0/ChowDown_Test"
+          os.makedirs(DIR, exist_ok=True)
+          try:
+              os.chdir(DIR)
+          except Exception:
+              pass
+
+          F_ORD = os.path.join(DIR, "orders.json")
+          F_STK = os.path.join(DIR, "stock.json")
+          F_MEN = os.path.join(DIR, "menu.json")
+          F_CAT = os.path.join(DIR, "categories.json")
+          F_CNT = os.path.join(DIR, "counter.json")
+          F_PHN = os.path.join(DIR, "phone_numbers.txt")
+          F_SALES = os.path.join(DIR, "daily_sales.json")
+          F_SMS = os.path.join(DIR, "sms_config.json")
+          F_STORE = os.path.join(DIR, "store_config.json")
+
+          orders = []
+          stock = {"chicken": 25, "chips": 15, "fish": 10, "tea": 30}
+          menu = [
+              {"id": "chicken", "name": "1/4 Chicken & Chips", "cat": "CHICKEN", "price": 60},
+              {"id": "chips", "name": "Large Chips", "cat": "SIDES", "price": 30},
+              {"id": "fish", "name": "Fish & Chips", "cat": "DOGS", "price": 55},
+              {"id": "tea", "name": "Bush Tea / Coffee", "cat": "DRINKS", "price": 15}
+          ]
+          categories = ["CHICKEN", "SIDES", "DOGS", "DRINKS"]
+          counter = 1
+
+          def load_json_safe(path, default):
+              try:
+                  if os.path.exists(path):
+                      with open(path, "r", encoding="utf-8") as f:
+                          return json.load(f)
+              except Exception:
+                  pass
+              return default
+
+          def save(f, d):
+              try:
+                  os.makedirs(os.path.dirname(f), exist_ok=True)
+                  with open(f, "w", encoding="utf-8") as out:
+                      json.dump(d, out)
+              except Exception:
+                  pass
+
+          def load_sms_config():
+              cfg = {"sms_enabled": False, "winsms_key": ""}
+              loaded = load_json_safe(F_SMS, {})
+              if isinstance(loaded, dict):
+                  cfg["sms_enabled"] = bool(loaded.get("sms_enabled", False))
+                  cfg["winsms_key"] = str(loaded.get("winsms_key", "") or "").strip()
+              return cfg
+
+          def save_sms_config(sms_enabled, winsms_key):
+              clean_key = str(winsms_key or "").strip()
+              cfg = {
+                  "sms_enabled": bool(sms_enabled),
+                  "winsms_key": clean_key,
+              }
+              save(F_SMS, cfg)
+              return cfg
+
+          def load_store_config():
+              cfg = {"store_name": "MY STORE"}
+              loaded = load_json_safe(F_STORE, {})
+              if isinstance(loaded, dict):
+                  name = str(loaded.get("store_name", "") or "").strip()
+                  if name:
+                      cfg["store_name"] = name
+              return cfg
+
+          def save_store_config(store_name):
+              clean_name = str(store_name or "").strip() or "MY STORE"
+              cfg = {"store_name": clean_name}
+              save(F_STORE, cfg)
+              return cfg
+
+          orders = load_json_safe(F_ORD, orders)
+          stock = load_json_safe(F_STK, stock)
+          menu = load_json_safe(F_MEN, menu)
+          categories = load_json_safe(F_CAT, categories)
+          cnt_data = load_json_safe(F_CNT, {})
+          if isinstance(cnt_data, dict) and "counter" in cnt_data:
+              counter = cnt_data.get("counter", 1)
+
+          try:
+              if not os.path.exists(F_PHN):
+                  with open(F_PHN, "w", encoding="utf-8") as ph_file:
+                      ph_file.write("")
+          except Exception:
+              pass
+
+          lock = threading.Lock()
+          _server_guard_lock = threading.Lock()
+          _server_started = False
+          _server_ip = "192.168.8.199"
+
+          def detect_local_ip():
+              ip = "192.168.8.199"
+              try:
+                  s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                  s.settimeout(2)
+                  s.connect(("8.8.8.8", 80))
+                  candidate = s.getsockname()[0]
+                  s.close()
+                  if candidate and not candidate.startswith("127."):
+                      ip = candidate
+              except Exception:
+                  pass
+              try:
+                  hostname_ip = socket.gethostbyname(socket.gethostname())
+                  if ip == "192.168.8.199" and hostname_ip and not hostname_ip.startswith("127."):
+                      ip = hostname_ip
+              except Exception:
+                  pass
+              return ip
+
+          def archive_daily_sales():
+              try:
+                  if not orders:
+                      return
+                  total_rand = 0
+                  item_counts = {}
+                  for o in orders:
+                      total_rand += o.get("total", 0)
+                      for it in o.get("items", []):
+                          name = it.get("name", it.get("id", "Unknown"))
+                          qty = it.get("qty", 0)
+                          item_counts[name] = item_counts.get(name, 0) + qty
+
+                  best_item = "None"
+                  least_item = "None"
+                  if item_counts:
+                      sorted_items = sorted(item_counts.items(), key=lambda x: x[1], reverse=True)
+                      best_item = f"{sorted_items[0][0]} ({sorted_items[0][1]} sold)"
+                      least_item = f"{sorted_items[-1][0]} ({sorted_items[-1][1]} sold)"
+
+                  report = {
+                      "date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                      "total_rand": total_rand,
+                      "total_orders_count": len(orders),
+                      "item_breakdown": item_counts,
+                      "best_seller": best_item,
+                      "least_seller": least_item
+                  }
+                  history = load_json_safe(F_SALES, [])
+                  if not isinstance(history, list):
+                      history = [history]
+                  history.append(report)
+                  save(F_SALES, history)
+              except Exception:
+                  pass
+
+          def clean_phone_number(phone_str):
+              if not phone_str:
+                  return ""
+              p = "".join(filter(str.isdigit, str(phone_str)))
+              if p.startswith("27") and len(p) == 11:
+                  p = "0" + p[2:]
+              return p
+
+          def get_cleaned_phones():
+              if not os.path.exists(F_PHN):
+                  return []
+              with open(F_PHN, "r", encoding="utf-8") as f:
+                  lines = f.readlines()
+              cleaned_list = []
+              for line in lines:
+                  cleaned = clean_phone_number(line.strip())
+                  if cleaned:
+                      cleaned_list.append(cleaned)
+              return sorted(list(set(cleaned_list)))
+
+          def delete_phone_number(target_phone):
+              cleaned_target = clean_phone_number(target_phone)
+              if not cleaned_target:
+                  return get_cleaned_phones()
+              remaining = [p for p in get_cleaned_phones() if p != cleaned_target]
+              with open(F_PHN, "w", encoding="utf-8") as out:
+                  for p in remaining:
+                      out.write(p + "\n")
+              return remaining
+
+          def send_sms(phone, msg):
+              if not phone:
+                  return {"ok": False, "reason": "no_phone"}
+              sms_cfg = load_sms_config()
+              if not sms_cfg.get("sms_enabled") or not sms_cfg.get("winsms_key"):
+                  return {"ok": False, "reason": "sms_disabled"}
+
+              p = "".join(filter(str.isdigit, str(phone)))
+              if p.startswith("0") and len(p) == 10:
+                  p = "27" + p[1:]
+              api_key = sms_cfg["winsms_key"]
+
+              def go():
+                  try:
+                      req = urllib.request.Request(
+                          "https://api.winsms.co.za/api/rest/v1/sms/outgoing/send",
+                          data=json.dumps({"message": str(msg), "recipients": [{"mobileNumber": p}]}).encode(),
+                          method="POST"
+                      )
+                      req.add_header("AUTHORIZATION", api_key)
+                      req.add_header("Content-Type", "application/json")
+                      req.add_header("Accept", "application/json")
+                      urllib.request.urlopen(req, timeout=10).read().decode()
+                  except Exception:
+                      pass
+
+              threading.Thread(target=go, daemon=True).start()
+              return {"ok": True}
+
+          DISPLAY_HTML = """<!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Live Status Board</title>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+            <style>
+              body{margin:0;font-family:sans-serif;background:#09090b;color:#fafafa;padding:15px}
+              h1{color:#facc15;text-align:center;font-size:30px;margin-bottom:20px}
+              .columns-grid{display:grid;grid-template-columns:repeat(3, 1fr);gap:15px;max-width:1400px;margin:0 auto}
+              .col{border-radius:16px;padding:15px;min-height:70vh}
+              .received-col{background:#ffffff;color:#000000;border:2px solid #e4e4e7}
+              .preparing-col{background:#facc15;color:#000000;border:2px solid #eab308}
+              .ready-col{background:#16a34a;color:#ffffff;border:2px solid #15803d}
+              .col-title{font-size:22px;font-weight:bold;text-align:center;margin-bottom:15px;padding-bottom:8px;border-bottom:2px solid rgba(0,0,0,0.15);color:#000000 !important}
+              .ready-col .col-title{border-bottom:2px solid rgba(255,255,255,0.3);color:#000000 !important}
+              .orders-grid{display:grid;grid-template-columns:repeat(4, 1fr);gap:10px}
+              .order-box{background:rgba(0,0,0,0.08);border-radius:10px;padding:12px 6px;text-align:center;font-size:22px;font-weight:bold;color:#000000}
+              .ready-col .order-box{background:rgba(255,255,255,0.25);color:#ffffff}
+              .empty-text{text-align:center;color:rgba(0,0,0,0.6);font-size:16px;margin-top:30px;grid-column: span 4;}
+              .ready-col .empty-text{color:rgba(255,255,255,0.8);}
+            </style>
+          </head>
+          <body>
+            <div id="root"></div>
+            <script>
+              const { useState, useEffect } = React;
+              const { createRoot } = ReactDOM;
+              function DisplayApp() {
+                const [orders, setOrders] = useState([]);
+                const [storeName, setStoreName] = useState("MY STORE");
+                useEffect(() => {
+                  const fetchOrders = async () => {
+                    try {
+                      const res = await fetch('/api/orders');
+                      if (res.ok) setOrders(await res.json());
+                      const stRes = await fetch('/api/store_config');
+                      if (stRes.ok) {
+                        const st = await stRes.json();
+                        if (st.store_name) setStoreName(st.store_name);
+                      }
+                    } catch(e) {}
+                  };
+                  fetchOrders();
+                  const interval = setInterval(fetchOrders, 2000);
+                  return () => clearInterval(interval);
+                }, []);
+
+                const activeOrders = orders.filter(o => o.status !== 'collected' && o.status !== 'done' && o.status !== 'complete').sort((a,b) => a.num - b.num);
+                const receivedOrders = activeOrders.filter(o => o.status === 'new' || !o.status);
+                const preparingOrders = activeOrders.filter(o => o.status === 'preparing');
+                const readyOrders = orders.filter(o => o.status === 'done' || o.status === 'complete').sort((a,b) => a.num - b.num);
+
+                return React.createElement('div', null,
+                  React.createElement('h1', null, '📺 ' + storeName.toUpperCase() + ' LIVE STATUS BOARD'),
+                  React.createElement('div', {className: 'columns-grid'},
+                    React.createElement('div', {className: 'col received-col'},
+                      React.createElement('div', {className: 'col-title'}, 'RECEIVED'),
+                      React.createElement('div', {className: 'orders-grid'},
+                        receivedOrders.length === 0 ? React.createElement('div', {className: 'empty-text'}, 'No orders') :
+                        receivedOrders.map(o => React.createElement('div', {key: o.num, className: 'order-box'}, '#' + o.num))
+                      )
+                    ),
+                    React.createElement('div', {className: 'col preparing-col'},
+                      React.createElement('div', {className: 'col-title'}, 'PREPARATION'),
+                      React.createElement('div', {className: 'orders-grid'},
+                        preparingOrders.length === 0 ? React.createElement('div', {className: 'empty-text'}, 'No orders') :
+                        preparingOrders.map(o => React.createElement('div', {key: o.num, className: 'order-box'}, '#' + o.num))
+                      )
+                    ),
+                    React.createElement('div', {className: 'col ready-col'},
+                      React.createElement('div', {className: 'col-title'}, 'DONE / READY'),
+                      React.createElement('div', {className: 'orders-grid'},
+                        readyOrders.length === 0 ? React.createElement('div', {className: 'empty-text'}, 'No orders') :
+                        readyOrders.map(o => React.createElement('div', {key: o.num, className: 'order-box'}, '#' + o.num))
+                      )
+                    )
+                  )
                 );
-                return androidId == null ? "unknown_device" : androidId.trim();
-            }
+              }
+              createRoot(document.getElementById('root')).render(React.createElement(DisplayApp));
+            </script>
+          </body>
+          </html>"""
 
-            private static boolean isWhitelistedDevice(Context context) {
-                String currentId = getDeviceId(context);
-                for (String id : WHITELISTED_DEVICE_IDS) {
-                    if (id != null && id.trim().equalsIgnoreCase(currentId)) {
-                        return true;
+          HTML_CONTENT = """<!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Trailer OS v9.11.12</title>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+            <style>
+              body{margin:0;font-family:sans-serif;background:#09090b;color:#fafafa;padding-bottom:50px}
+              .header{background:#18181b;border-bottom:2px solid #27272a;padding:14px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:100;flex-wrap:wrap;gap:8px}
+              .btn{font-weight:700;padding:10px 16px;border-radius:10px;border:none;cursor:pointer}
+              .btn-yellow{background:#facc15;color:#000}
+              .btn-zinc{background:#27272a;color:#fafafa}
+              .btn-green{background:#16a34a;color:#fff}
+              .btn-blue{background:#2563eb;color:#fff}
+              .btn-red{background:#dc2626;color:#fff}
+              .card{background:#18181b;border:1px solid #27272a;border-radius:14px;padding:16px;margin-bottom:14px}
+              .container{max-width:900px;margin:0 auto;padding:14px}
+              .badge{padding:6px 12px;border-radius:8px;font-size:14px;font-weight:bold;background:#facc15;color:#000}
+              input, select, textarea{background:#27272a;color:#fafafa;padding:10px;border-radius:8px;border:1px solid #3f3f46;width:100%;margin-bottom:10px;font-size:16px;box-sizing:border-box}
+              .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+              @media(max-width: 768px) { .grid { grid-template-columns: 1fr; } }
+              .receipt { background: #fef08a; color: #000; font-family: monospace; padding: 16px; border-radius: 8px; margin-bottom: 15px; }
+              .receipt-phone { font-weight: 800; font-size: 1.1em; }
+              .columns-grid{display:grid;grid-template-columns:repeat(3, 1fr);gap:12px}
+              .col{border-radius:12px;padding:12px;min-height:60vh}
+              .received-col{background:#ffffff;color:#000000;border:1px solid #e4e4e7}
+              .preparing-col{background:#facc15;color:#000000;border:1px solid #eab308}
+              .ready-col{background:#16a34a;color:#ffffff;border:1px solid #15803d}
+              .col-title{font-size:15px;font-weight:bold;text-align:center;margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid rgba(0,0,0,0.15);color:#000000 !important}
+              .ready-col .col-title{border-bottom:1px solid rgba(255,255,255,0.3);color:#000000 !important}
+              .orders-grid{display:grid;grid-template-columns:repeat(4, 1fr);gap:8px}
+              .order-box{background:rgba(0,0,0,0.08);border-radius:6px;padding:10px 4px;text-align:center;font-size:18px;font-weight:bold;color:#000000}
+              .ready-col .order-box{background:rgba(255,255,255,0.25);color:#ffffff}
+            </style>
+          </head>
+          <body>
+            <div id="root"></div>
+            <script>
+              const { useState, useEffect, useMemo } = React;
+              const { createRoot } = ReactDOM;
+
+              function App() {
+                const [role, setRole] = useState("ORDER");
+                const [isServerTab, setIsServerTab] = useState(false);
+                const [device, setDevice] = useState("PHONE");
+                const [appVersion, setAppVersion] = useState("v9.11.12");
+                const [serverIp, setServerIp] = useState("");
+                const [serverPort, setServerPort] = useState("8080");
+                const [menu, setMenu] = useState([]);
+                const [categories, setCategories] = useState(["CHICKEN", "SIDES", "DOGS", "DRINKS"]);
+                const [stock, setStock] = useState({});
+                const [orders, setOrders] = useState([]);
+                const [dailySalesHistory, setDailySalesHistory] = useState([]);
+                const [cart, setCart] = useState({});
+                const [customerPhone, setCustomerPhone] = useState("");
+                const [currentCounter, setCurrentCounter] = useState(1);
+                const [lastOrderNum, setLastOrderNum] = useState(null);
+                const [isOnline, setIsOnline] = useState(true);
+                const [kitchenStatusMsg, setKitchenStatusMsg] = useState("");
+
+                const [storeName, setStoreName] = useState("MY STORE");
+                const [storeNameInput, setStoreNameInput] = useState("MY STORE");
+                const [smsEnabled, setSmsEnabled] = useState(false);
+                const [winsmsKeyInput, setWinsmsKeyInput] = useState("");
+
+                const [newItemName, setNewItemName] = useState("");
+                const [newItemCat, setNewItemCat] = useState("CHICKEN");
+                const [newItemPrice, setNewItemPrice] = useState("");
+                const [newItemStock, setNewItemStock] = useState("20");
+                const [newCategoryName, setNewCategoryName] = useState("");
+
+                const [phoneNumbers, setPhoneNumbers] = useState([]);
+                const [selectedPhones, setSelectedPhones] = useState(new Set());
+                const [bulkSmsMessage, setBulkSmsMessage] = useState("Check out our latest specials today!");
+
+                const refreshPhones = async () => {
+                  const pRes = await fetch('/api/phones');
+                  if (pRes.ok) {
+                    const list = await pRes.json();
+                    setPhoneNumbers(Array.isArray(list) ? list : []);
+                  }
+                };
+
+                useEffect(() => {
+                  const hostCheck = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" || window.location.port === "8080";
+                  setIsServerTab(hostCheck);
+                  if (hostCheck) setDevice("TAB-8 SERVER");
+
+                  localStorage.setItem("pos_last_origin", window.location.origin);
+
+                  const fetchData = async () => {
+                    try {
+                      const vRes = await fetch('/api/version');
+                      if (vRes.ok) {
+                        const vData = await vRes.json();
+                        if (vData && vData.version) setAppVersion(vData.version);
+                      }
+
+                      const infoRes = await fetch('/api/server_info');
+                      if (infoRes.ok) {
+                        const infoData = await infoRes.json();
+                        if (infoData && infoData.ip) setServerIp(infoData.ip);
+                        if (infoData && infoData.port) setServerPort(String(infoData.port));
+                      }
+
+                      const res = await fetch('/api/orders');
+                      if (res.ok) {
+                        setOrders(await res.json());
+                        setIsOnline(true);
+                      } else {
+                        setIsOnline(false);
+                      }
+
+                      const sRes = await fetch('/api/stock'); if (sRes.ok) setStock(await sRes.json());
+                      const mRes = await fetch('/api/menu'); if (mRes.ok) setMenu(await mRes.json());
+                      const cRes = await fetch('/api/categories'); if (cRes.ok) setCategories(await cRes.json());
+
+                      const cntRes = await fetch('/api/counter');
+                      if (cntRes.ok) {
+                        const cntData = await cntRes.json();
+                        setCurrentCounter(cntData.counter);
+                      }
+
+                      await refreshPhones();
+
+                      const salesHistRes = await fetch('/api/daily_sales');
+                      if (salesHistRes.ok) setDailySalesHistory(await salesHistRes.json());
+
+                      const stRes = await fetch('/api/store_config');
+                      if (stRes.ok) {
+                        const stData = await stRes.json();
+                        if (stData.store_name) setStoreName(stData.store_name);
+                      }
+
+                      const smsRes = await fetch('/api/sms_config');
+                      if (smsRes.ok) {
+                        const smsData = await smsRes.json();
+                        setSmsEnabled(!!smsData.sms_enabled);
+                        setWinsmsKeyInput(smsData.winsms_key || "");
+                      }
+                    } catch(e) {
+                      setIsOnline(false);
                     }
-                }
-                return false;
-            }
+                  };
 
-            public static ValidationResult activateKey(Context context, String rawKey) {
-                if (isWhitelistedDevice(context)) {
-                    String cleanKey = rawKey == null ? "" : rawKey.trim().toUpperCase(Locale.US);
-                    SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-                    prefs.edit()
-                            .putString(KEY_SAVED_LICENSE, cleanKey)
-                            .putString(KEY_LAST_SEEN_DATE, formatYyyyMmDd(getTodayDateOnly()))
-                            .apply();
-                    return new ValidationResult(true, "License activated successfully.");
-                }
+                  fetchData();
+                  const interval = setInterval(fetchData, 2000);
+                  return () => clearInterval(interval);
+                }, []);
 
-                if (rawKey == null || rawKey.trim().isEmpty()) {
-                    return new ValidationResult(false, "Please enter a license key.");
-                }
+                useEffect(() => {
+                  if (role === 'SETUP') {
+                    setStoreNameInput(storeName);
+                  }
+                }, [role, storeName]);
 
-                String normalizedKey = rawKey.trim().toUpperCase(Locale.US);
-                String[] parts = normalizedKey.split("-");
-                if (parts.length != 2) {
-                    return new ValidationResult(false, "Invalid key format.");
-                }
+                const displayedHostIp = serverIp || ((window.location.hostname && window.location.hostname !== "127.0.0.1" && window.location.hostname !== "localhost") ? window.location.hostname : "192.168.8.199");
+                const displayedServerUrl = `http://${displayedHostIp}:${serverPort || "8080"}`;
 
-                String expiryStr = parts[0].trim();
-                String providedSig = parts[1].trim();
+                const handleReconnect = () => {
+                  const lastOrigin = localStorage.getItem("pos_last_origin") || displayedServerUrl || window.location.origin;
+                  const targetUrl = prompt("Confirm or enter Tab-8 Server URL to reconnect (e.g. http://192.168.8.199:8080):", lastOrigin);
+                  if (targetUrl) {
+                    window.location.href = targetUrl.trim();
+                  }
+                };
 
-                if (!expiryStr.matches("\\d{8}") || providedSig.length() != 12) {
-                    return new ValidationResult(false, "Invalid key format or length.");
-                }
+                const cartItems = useMemo(() => {
+                  return Object.entries(cart).filter(([id, qty]) => qty > 0).map(([id, qty]) => {
+                    const item = menu.find(m => m.id === id);
+                    return { id, name: item ? item.name : id, qty, price: item ? item.price : 0, ticked: false };
+                  });
+                }, [cart, menu]);
 
-                Date expiryDate = parseYyyyMmDd(expiryStr);
-                Date todayDate = getTodayDateOnly();
-                String todayStr = formatYyyyMmDd(todayDate);
+                const totalAmount = cartItems.reduce((sum, item) => sum + (item.qty * item.price), 0);
+                const activeOrderNumDisplay = lastOrderNum || currentCounter;
 
-                if (expiryDate == null) {
-                    return new ValidationResult(false, "Invalid expiration date in key.");
-                }
+                const triggerPrint = (orderNum, itemsList, totalVal, phoneVal) => {
+                  const now = new Date();
+                  const dateStr = now.toLocaleDateString([], { year: 'numeric', month: '2-digit', day: '2-digit' });
+                  const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                  const headerName = (storeName || "MY STORE").toUpperCase();
 
-                String expectedSig = computeShortHmac(getDeviceId(context), expiryStr);
-                if (!MessageDigest.isEqual(
-                        expectedSig.getBytes(StandardCharsets.UTF_8),
-                        providedSig.getBytes(StandardCharsets.UTF_8))) {
-                    return new ValidationResult(false, "License key does not match this device.");
-                }
+                  const ESC = '\\x1b';
+                  const bigBoldOn = ESC + '!' + '\\x38';
+                  const phoneBoldBiggerOn = ESC + '!' + '\\x10';
+                  const boldOn = ESC + 'E' + '\\x01';
+                  const resetSize = ESC + '!' + '\\x00';
 
-                if (todayDate.after(expiryDate)) {
-                    return new ValidationResult(false, "This license key has expired.");
-                }
+                  let text = `${bigBoldOn}      ORDER #${orderNum}\\n${resetSize}`;
 
-                SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-                String lastSeenStr = prefs.getString(KEY_LAST_SEEN_DATE, null);
-                if (lastSeenStr != null) {
-                    Date lastSeenDate = parseYyyyMmDd(lastSeenStr);
-                    if (lastSeenDate != null && todayDate.before(lastSeenDate)) {
-                        return new ValidationResult(false, "System clock change detected. Please check device date.");
+                  if (phoneVal && phoneVal.trim() !== '') {
+                    text += `${phoneBoldBiggerOn}CELL: ${phoneVal.trim()}\\n${resetSize}`;
+                  }
+
+                  text += `${boldOn}================================\\n       ${headerName}       \\n================================\\n${resetSize}Date: ${dateStr} | Time: ${timeStr} | Device: ${device}\\n--------------------------------\\n`;
+
+                  itemsList.forEach(i => {
+                    text += `${resetSize}${i.qty}x ${i.name} @ R${i.price} each = R${i.qty * i.price}\\n`;
+                  });
+
+                  text += `${boldOn}--------------------------------\\n${resetSize}${bigBoldOn}TOTAL: R${totalVal}\\n${resetSize}${boldOn}================================\\n  Thank You For Eating With Us  \\nPlease collect your order at ${headerName}.\\n================================\\n\\n\\n${resetSize}`;
+
+                  const rawUrl = "rawbt:data:text/plain;base64," + btoa(text);
+                  window.location.href = rawUrl;
+                };
+
+                const sendOrderToKitchen = async () => {
+                  if (cartItems.length === 0) return;
+                  setKitchenStatusMsg("");
+                  try {
+                    const res = await fetch('/api/orders', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ items: cartItems, total: totalAmount, phone: customerPhone.trim() })
+                    });
+                    const jsonRes = await res.json();
+                    if (jsonRes.ok) {
+                      const sentMsg = `Order sent to kitchen (Order #${jsonRes.num}).`;
+                      setKitchenStatusMsg(sentMsg);
+                      setLastOrderNum(jsonRes.num);
+                      setCurrentCounter(jsonRes.num + 1);
+                      const sRes = await fetch('/api/stock');
+                      if (sRes.ok) setStock(await sRes.json());
+                      setCart({});
+                      setCustomerPhone("");
+                      setIsOnline(true);
+                      alert(sentMsg);
+                    } else {
+                      alert(jsonRes.error || 'Server error processing order');
                     }
-                }
+                  } catch(e) {
+                    setIsOnline(false);
+                    alert('⚠️ Network Offline! Order failed to sync with Tab-8 server. Please check Wi-Fi connection.');
+                  }
+                };
 
-                String updatedLastSeen = (lastSeenStr == null || todayStr.compareTo(lastSeenStr) > 0)
-                        ? todayStr
-                        : lastSeenStr;
-
-                prefs.edit()
-                        .putString(KEY_SAVED_LICENSE, normalizedKey)
-                        .putString(KEY_LAST_SEEN_DATE, updatedLastSeen)
-                        .apply();
-
-                return new ValidationResult(true, "License activated successfully.");
-            }
-
-            public static boolean isLicenseActive(Context context) {
-                if (isWhitelistedDevice(context)) {
-                    return true;
-                }
-
-                SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-                Date todayDate = getTodayDateOnly();
-                String todayStr = formatYyyyMmDd(todayDate);
-
-                String lastSeenStr = prefs.getString(KEY_LAST_SEEN_DATE, null);
-                if (lastSeenStr != null) {
-                    Date lastSeenDate = parseYyyyMmDd(lastSeenStr);
-                    if (lastSeenDate != null && todayDate.before(lastSeenDate)) {
-                        return false;
+                const updateOrderStatus = async (e, orderNum, newStatus, updatedItems = null) => {
+                  if (e) e.preventDefault();
+                  try {
+                    const target = orders.find(o => o.num === orderNum);
+                    if (!target) return;
+                    if (newStatus === 'collected') {
+                      if (!window.confirm("Are you sure?")) return;
                     }
-                }
 
-                String savedKey = prefs.getString(KEY_SAVED_LICENSE, null);
-                if (savedKey == null || savedKey.isEmpty()) {
-                    return false;
-                }
+                    const isMarkingDone = (newStatus === 'done' && target.status !== 'done' && target.status !== 'complete');
+                    const updated = { ...target, status: newStatus };
+                    if (updatedItems) updated.items = updatedItems;
 
-                String[] parts = savedKey.split("-");
-                if (parts.length != 2) {
-                    return false;
-                }
+                    const res = await fetch('/api/orders', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ ...updated, trigger_sms: isMarkingDone })
+                    });
 
-                String expiryStr = parts[0].trim();
-                String savedSig = parts[1].trim();
-                Date expiryDate = parseYyyyMmDd(expiryStr);
-                if (expiryDate == null || todayDate.after(expiryDate)) {
-                    return false;
-                }
+                    if (res.ok) {
+                      setIsOnline(true);
+                      const out = await res.json();
+                      if (isMarkingDone && target.phone && target.phone.trim() !== '') {
+                        if (out.sms_sent) {
+                          alert(`[SMS SENT] Order #${orderNum} notification sent to ${target.phone}`);
+                        } else {
+                          alert(`Order #${orderNum} marked DONE. (Custom SMS is off or no WinSMS API key is saved.)`);
+                        }
+                      }
+                    }
 
-                String expectedSig = computeShortHmac(getDeviceId(context), expiryStr);
-                boolean sigMatches = MessageDigest.isEqual(
-                        expectedSig.getBytes(StandardCharsets.UTF_8),
-                        savedSig.getBytes(StandardCharsets.UTF_8)
+                    const fetchRes = await fetch('/api/orders');
+                    if (fetchRes.ok) setOrders(await fetchRes.json());
+                  } catch(err) {
+                    setIsOnline(false);
+                  }
+                };
+
+                const toggleItemTick = (orderNum, itemIdx) => {
+                  const target = orders.find(o => o.num === orderNum);
+                  if (!target) return;
+                  const newItems = target.items.map((it, idx) => idx === itemIdx ? { ...it, ticked: !it.ticked } : it);
+                  updateOrderStatus(null, orderNum, target.status, newItems);
+                };
+
+                const updateStockCount = async (itemId, delta) => {
+                  const newStock = { ...stock, [itemId]: Math.max(0, (stock[itemId] || 0) + delta) };
+                  setStock(newStock);
+                  try {
+                    await fetch('/api/stock', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newStock) });
+                  } catch(e) {}
+                };
+
+                const handleSaveStoreConfig = async (e) => {
+                  e.preventDefault();
+                  const cleaned = (storeNameInput || "").trim() || "MY STORE";
+                  try {
+                    const res = await fetch('/api/store_config', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ store_name: cleaned })
+                    });
+                    if (res.ok) {
+                      const data = await res.json();
+                      setStoreName(data.store_name || cleaned);
+                      setStoreNameInput(data.store_name || cleaned);
+                      alert("Invoice / store name saved!");
+                    }
+                  } catch(err) {
+                    alert("Failed to save store name.");
+                  }
+                };
+
+                const handleSaveSmsConfig = async (e) => {
+                  e.preventDefault();
+                  const trimmedKey = (winsmsKeyInput || "").trim();
+                  if (smsEnabled && !trimmedKey) {
+                    return alert("Please enter your WinSMS API key to activate custom SMS.");
+                  }
+                  try {
+                    const res = await fetch('/api/sms_config', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ sms_enabled: smsEnabled, winsms_key: trimmedKey })
+                    });
+                    if (res.ok) {
+                      const data = await res.json();
+                      setSmsEnabled(!!data.sms_enabled);
+                      setWinsmsKeyInput(data.winsms_key || "");
+                      alert(data.sms_enabled ? "Custom SMS activated and API key saved!" : "Custom SMS settings saved.");
+                    }
+                  } catch (err) {
+                    alert("Failed to save SMS settings.");
+                  }
+                };
+
+                const handleAddMenuItem = async (e) => {
+                  e.preventDefault();
+                  if (!newItemName || !newItemPrice) return alert("Enter item name and price");
+                  const id = newItemName.toLowerCase().replace(/\\s+/g, '_');
+                  const price = parseFloat(newItemPrice);
+                  const newMenu = [...menu, { id, name: newItemName, cat: newItemCat, price }];
+                  const newStock = { ...stock, [id]: parseInt(newItemStock) || 10 };
+                  try {
+                    await fetch('/api/menu', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newMenu) });
+                    await fetch('/api/stock', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newStock) });
+                    setMenu(newMenu); setStock(newStock);
+                    setNewItemName(""); setNewItemPrice("");
+                    alert("Menu item added!");
+                  } catch(e) { alert("Failed to add item."); }
+                };
+
+                const handleDeleteMenuItem = async (id) => {
+                  if (!window.confirm("Delete this menu item?")) return;
+                  const newMenu = menu.filter(m => m.id !== id);
+                  try {
+                    await fetch('/api/menu', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newMenu) });
+                    setMenu(newMenu);
+                  } catch(e) {}
+                };
+
+                const handleEditMenuItem = async (item) => {
+                  const newName = prompt("Edit item name / description:", item.name);
+                  if (newName === null) return;
+                  const newPriceStr = prompt("Edit item price (R):", item.price);
+                  if (newPriceStr === null) return;
+                  const newPrice = parseFloat(newPriceStr);
+                  if (isNaN(newPrice)) return alert("Invalid price entered.");
+
+                  const updatedMenu = menu.map(m => m.id === item.id ? { ...m, name: newName.trim(), price: newPrice } : m);
+                  try {
+                    await fetch('/api/menu', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatedMenu) });
+                    setMenu(updatedMenu);
+                    alert("Menu item updated successfully!");
+                  } catch(e) { alert("Failed to update menu item."); }
+                };
+
+                const handleAddCategory = async (e) => {
+                  e.preventDefault();
+                  if (!newCategoryName) return;
+                  const formatted = newCategoryName.toUpperCase().trim();
+                  if (categories.includes(formatted)) return alert("Category already exists");
+                  const newCats = [...categories, formatted];
+                  try {
+                    await fetch('/api/categories', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(newCats) });
+                    setCategories(newCats); setNewCategoryName("");
+                    alert("Category added!");
+                  } catch(e) { alert("Failed to add category."); }
+                };
+
+                const handleResetCounter = async () => {
+                  const val = prompt("Enter new starting order number:", currentCounter);
+                  if (val === null) return;
+                  const num = parseInt(val);
+                  if (isNaN(num)) return alert("Invalid number");
+                  try {
+                    await fetch('/api/counter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ counter: num }) });
+                    setCurrentCounter(num); setLastOrderNum(null);
+                    alert("Order counter updated!");
+                  } catch(e) { alert("Failed to update counter."); }
+                };
+
+                const handleCashOutDay = async () => {
+                  if (!window.confirm("Cash out the day? This will archive sales and reset active orders.")) return;
+                  try {
+                    const res = await fetch('/api/counter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ counter: currentCounter, reset_day: true }) });
+                    if(res.ok) {
+                      setOrders([]);
+                      const salesHistRes = await fetch('/api/daily_sales');
+                      if (salesHistRes.ok) setDailySalesHistory(await salesHistRes.json());
+                      alert("Day's sales successfully cashed out and archived!");
+                    }
+                  } catch(e) { alert("Failed to cash out."); }
+                };
+
+                const togglePhoneSelection = (phone) => {
+                  const newSelected = new Set(selectedPhones);
+                  if (newSelected.has(phone)) {
+                    newSelected.delete(phone);
+                  } else {
+                    newSelected.add(phone);
+                  }
+                  setSelectedPhones(newSelected);
+                };
+
+                const handleDeletePhone = async (phone) => {
+                  if (!window.confirm(`Delete ${phone} from saved numbers?`)) return;
+                  try {
+                    const res = await fetch('/api/phones/delete', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ phone })
+                    });
+                    if (res.ok) {
+                      setIsOnline(true);
+                      const data = await res.json();
+                      const updatedList = Array.isArray(data.phones) ? data.phones : phoneNumbers.filter(p => p !== phone);
+                      setPhoneNumbers(updatedList);
+                      const nextSelected = new Set(selectedPhones);
+                      nextSelected.delete(phone);
+                      setSelectedPhones(nextSelected);
+                      await refreshPhones();
+                    } else {
+                      alert("Failed to delete phone number.");
+                    }
+                  } catch (e) {
+                    setIsOnline(false);
+                    alert("⚠️ Network Offline! Could not delete phone number.");
+                  }
+                };
+
+                const selectAllPhones = (e) => {
+                  if (e.target.checked) {
+                    setSelectedPhones(new Set(phoneNumbers));
+                  } else {
+                    setSelectedPhones(new Set());
+                  }
+                };
+
+                const sendBulkSms = async () => {
+                  if (!smsEnabled || !winsmsKeyInput.trim()) {
+                    return alert("Please activate Custom SMS and enter your WinSMS API key in SETUP first.");
+                  }
+                  if (selectedPhones.size === 0) return alert("Select at least one number.");
+                  if (!bulkSmsMessage.trim()) return alert("Enter an SMS message.");
+
+                  if (!window.confirm(`Send SMS to ${selectedPhones.size} contacts?`)) return;
+
+                  try {
+                    const res = await fetch('/api/bulk-sms', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ numbers: Array.from(selectedPhones), message: bulkSmsMessage })
+                    });
+                    const jsonRes = await res.json();
+                    if (jsonRes.ok) {
+                      alert(`[SUCCESS] SMS sent to ${jsonRes.sent_count} contact(s)!`);
+                      setSelectedPhones(new Set());
+                      setBulkSmsMessage("");
+                    } else {
+                      alert(jsonRes.error || 'Server error sending SMS');
+                    }
+                  } catch(e) {
+                    setIsOnline(false);
+                    alert('⚠️ Network Offline! Failed to send bulk SMS. Please check Wi-Fi connection.');
+                  }
+                };
+
+                const activeKitchenOrders = useMemo(() => orders.filter(o => o.status !== 'collected').sort((a, b) => a.num - b.num), [orders]);
+                const activeSalesOrders = useMemo(() => orders.filter(o => o.status === 'done' || o.status === 'complete' || o.status === 'collected'), [orders]);
+
+                const totalRandSales = useMemo(() => activeSalesOrders.reduce((sum, o) => sum + o.total, 0), [activeSalesOrders]);
+                const salesItemBreakdown = useMemo(() => {
+                  const counts = {};
+                  activeSalesOrders.forEach(o => {
+                    o.items.forEach(it => {
+                      const name = it.name || it.id;
+                      counts[name] = (counts[name] || 0) + it.qty;
+                    });
+                  });
+                  return counts;
+                }, [activeSalesOrders]);
+
+                const sortedSalesItems = useMemo(() => {
+                  return Object.entries(salesItemBreakdown).sort((a,b) => b[1] - a[1]);
+                }, [salesItemBreakdown]);
+
+                const receivedOrders = useMemo(() => activeKitchenOrders.filter(o => o.status === 'new' || !o.status), [activeKitchenOrders]);
+                const preparingOrders = useMemo(() => activeKitchenOrders.filter(o => o.status === 'preparing'), [activeKitchenOrders]);
+                const readyOrders = useMemo(() => activeKitchenOrders.filter(o => o.status === 'done' || o.status === 'complete'), [activeKitchenOrders]);
+
+                const formatStageLabel = (statusVal) => {
+                  if (statusVal === 'preparing') return 'PREPARATION';
+                  if (statusVal === 'done' || statusVal === 'complete') return 'DONE';
+                  return 'NEW';
+                };
+
+                return React.createElement('div', null,
+                  React.createElement('div', { className: 'header' },
+                    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
+                      React.createElement('h2', { style: { color: '#facc15', margin: 0 } }, storeName.toUpperCase()),
+                      React.createElement('span', { style: { background: '#27272a', padding: '2px 8px', borderRadius: 6, fontSize: 12, color: '#a1a1aa' } }, appVersion),
+                      React.createElement('button', {
+                        className: 'btn',
+                        onClick: handleReconnect,
+                        title: "Click to Reconnect / Reset Connection",
+                        style: {
+                          background: isOnline ? '#064e3b' : '#7f1d1d',
+                          color: isOnline ? '#6ee7b7' : '#fca5a5',
+                          border: '1px solid ' + (isOnline ? '#10b981' : '#ef4444'),
+                          padding: '10px 16px',
+                          borderRadius: 10,
+                          fontSize: 14,
+                          fontWeight: '700',
+                          cursor: 'pointer'
+                        }
+                      }, isOnline ? '🟢 ONLINE' : '🔴 OFFLINE'),
+                      React.createElement('span', {
+                        style: {
+                          background: '#27272a',
+                          color: '#facc15',
+                          border: '1px solid #3f3f46',
+                          padding: '8px 12px',
+                          borderRadius: 10,
+                          fontSize: 13,
+                          fontWeight: '700'
+                        }
+                      }, 'IP: ' + displayedHostIp + ':' + (serverPort || '8080'))
+                    ),
+                    React.createElement('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
+                      React.createElement('button', { className: 'btn ' + (role === 'ORDER' ? 'btn-yellow' : 'btn-zinc'), onClick: () => setRole('ORDER') }, 'ORDER'),
+                      React.createElement('button', { className: 'btn ' + (role === 'KITCHEN' ? 'btn-yellow' : 'btn-zinc'), onClick: () => setRole('KITCHEN') }, 'KITCHEN (' + activeKitchenOrders.length + ')'),
+                      isServerTab && React.createElement('button', { className: 'btn ' + (role === 'SALES' ? 'btn-yellow' : 'btn-zinc'), onClick: () => setRole('SALES') }, '📊 SALES'),
+                      isServerTab && React.createElement('button', { className: 'btn ' + (role === 'DISPLAY' ? 'btn-yellow' : 'btn-zinc'), onClick: () => setRole('DISPLAY') }, '📺 DISPLAY'),
+                      isServerTab && React.createElement('button', { className: 'btn ' + (role === 'SETUP' ? 'btn-yellow' : 'btn-zinc'), onClick: () => setRole('SETUP') }, '⚙️ SETUP'),
+                      React.createElement('button', { className: 'btn ' + (role === 'STOCK' ? 'btn-yellow' : 'btn-zinc'), onClick: () => setRole('STOCK') }, 'STOCK'),
+                      React.createElement('button', { className: 'btn ' + (role === 'NUMBERS' ? 'btn-yellow' : 'btn-zinc'), onClick: () => setRole('NUMBERS') }, '📱 NUMBERS')
+                    )
+                  ),
+                  React.createElement('div', { className: 'container' },
+                    role === 'ORDER' ? React.createElement('div', null,
+                      !isOnline && React.createElement('div', { className: 'card', style: { background: '#7f1d1d', border: '2px solid #ef4444', textAlign: 'center', marginBottom: 15 } },
+                        React.createElement('div', { style: { fontWeight: 'bold', fontSize: 16, color: '#fca5a5', marginBottom: 6 } }, '⚠️ WARNING: OFFLINE FROM TAB-8 SERVER'),
+                        React.createElement('div', { style: { fontSize: 13, marginBottom: 10 } }, 'Your phone has lost connection to the tablet server. Order numbers may get out of sync if you continue taking orders.'),
+                        React.createElement('button', { className: 'btn btn-yellow', onClick: handleReconnect }, '🔄 Reconnect to Last Active Connection')
+                      ),
+                      kitchenStatusMsg && React.createElement('div', { className: 'card', style: { background: '#064e3b', border: '2px solid #10b981', color: '#ecfdf5', fontWeight: 'bold', textAlign: 'center', marginBottom: 15 } },
+                        kitchenStatusMsg
+                      ),
+                      React.createElement('h3', { style: { color: '#facc15' } }, 'Menu & Ordering (Next: #' + currentCounter + ')'),
+                      menu.map(item => React.createElement('div', { key: item.id, className: 'card', style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+                        React.createElement('div', null,
+                          React.createElement('div', { style: { fontWeight: 'bold', fontSize: 18 } }, item.name, ' ', React.createElement('span', { style: { fontSize: 12, background: '#27272a', padding: '2px 6px', borderRadius: 4, color: '#a1a1aa' } }, item.cat)),
+                          React.createElement('div', { style: { color: '#facc15' } }, 'R', item.price, ' (Stock: ', stock[item.id] || 0, ')')
+                        ),
+                        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
+                          React.createElement('button', { className: 'btn btn-zinc', onClick: () => setCart(c => ({ ...c, [item.id]: Math.max(0, (c[item.id] || 0) - 1) })) }, '-'),
+                          React.createElement('span', { style: { fontSize: 18, fontWeight: 'bold', width: 20, textAlign: 'center' } }, cart[item.id] || 0),
+                          React.createElement('button', { className: 'btn btn-yellow', onClick: () => setCart(c => ({ ...c, [item.id]: (c[item.id] || 0) + 1 })) }, '+')
+                        )
+                      )),
+                      cartItems.length > 0 && React.createElement('div', { className: 'card', style: { border: '2px solid #facc15' } },
+                        React.createElement('h4', { style: { color: '#facc15', margin: '0 0 10px 0' } }, '📱 Customer Phone for SMS'),
+                        React.createElement('input', { type: 'tel', placeholder: 'e.g. 082 123 4567', value: customerPhone, onChange: e => setCustomerPhone(e.target.value) }),
+                        React.createElement('div', { className: 'receipt' },
+                          React.createElement('div', { style: { fontWeight: 'bold' } }, storeName.toUpperCase() + ' — ORDER #' + activeOrderNumDisplay),
+                          customerPhone && React.createElement('div', { className: 'receipt-phone' }, 'Phone: ' + customerPhone),
+                          cartItems.map((ci, idx) => React.createElement('div', { key: idx }, ci.qty + 'x ' + ci.name + ' - R' + (ci.qty * ci.price))),
+                          React.createElement('div', { style: { fontWeight: 'bold', marginTop: 6 } }, 'TOTAL: R' + totalAmount)
+                        ),
+                        React.createElement('div', { style: { display: 'flex', gap: 10 } },
+                          React.createElement('button', { className: 'btn btn-zinc', style: { flex: 1, padding: 14 }, onClick: () => triggerPrint(activeOrderNumDisplay, cartItems, totalAmount, customerPhone) }, '🖨️ Print'),
+                          React.createElement('button', { className: 'btn btn-green', style: { flex: 1, padding: 14 }, onClick: sendOrderToKitchen }, '➡️ Send to Kitchen')
+                        )
+                      )
+                    ) : role === 'STOCK' ? React.createElement('div', null,
+                      React.createElement('h3', { style: { color: '#facc15' } }, 'Stock Management'),
+                      Object.entries(stock).map(([k, v]) => React.createElement('div', { key: k, className: 'card', style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+                        React.createElement('span', { style: { fontWeight: 'bold', textTransform: 'uppercase' } }, k),
+                        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
+                          React.createElement('span', { className: 'badge' }, v, ' left'),
+                          React.createElement('button', { className: 'btn btn-zinc', onClick: () => updateStockCount(k, -1) }, '-'),
+                          React.createElement('button', { className: 'btn btn-yellow', onClick: () => updateStockCount(k, 1) }, '+')
+                        )
+                      ))
+                    ) : role === 'SETUP' && isServerTab ? React.createElement('div', null,
+                      React.createElement('h3', { style: { color: '#facc15' } }, 'Setup & Administrative Controls'),
+                      React.createElement('div', { className: 'card' },
+                        React.createElement('h4', { style: { color: '#facc15', margin: '0 0 10px 0' } }, 'Invoice & Store Name'),
+                        React.createElement('form', { onSubmit: handleSaveStoreConfig },
+                          React.createElement('input', {
+                            type: 'text',
+                            placeholder: 'Enter business name for invoices & SMS',
+                            value: storeNameInput,
+                            onChange: e => setStoreNameInput(e.target.value)
+                          }),
+                          React.createElement('button', { className: 'btn btn-green', type: 'submit', style: { width: '100%' } }, 'Save Store / Invoice Name')
+                        )
+                      ),
+                      React.createElement('div', { className: 'card' },
+                        React.createElement('h4', { style: { color: '#facc15', margin: '0 0 10px 0' } }, 'Custom SMS Settings (WinSMS)'),
+                        React.createElement('form', { onSubmit: handleSaveSmsConfig },
+                          React.createElement('label', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, cursor: 'pointer', fontWeight: 'bold' } },
+                            React.createElement('input', {
+                              type: 'checkbox',
+                              checked: smsEnabled,
+                              onChange: e => setSmsEnabled(e.target.checked),
+                              style: { width: 20, height: 20, margin: 0 }
+                            }),
+                            'Activate Custom SMS (Customer WinSMS Account)'
+                          ),
+                          React.createElement('input', {
+                            type: 'text',
+                            placeholder: 'Enter customer WinSMS API Key',
+                            value: winsmsKeyInput,
+                            onChange: e => setWinsmsKeyInput(e.target.value),
+                            style: { opacity: 1 }
+                          }),
+                          React.createElement('button', { className: 'btn btn-blue', type: 'submit', style: { width: '100%' } }, 'Save SMS Settings')
+                        )
+                      ),
+                      React.createElement('div', { className: 'card' },
+                        React.createElement('h4', { style: { color: '#facc15', margin: '0 0 10px 0' } }, 'End-of-Day Cash Out'),
+                        React.createElement('button', { className: 'btn btn-red', style: { width: '100%', marginBottom: 10 }, onClick: handleCashOutDay }, '💰 Cash Out Day (Archive & Clear Orders)'),
+                        React.createElement('h4', { style: { color: '#facc15', margin: '15px 0 10px 0' } }, 'Order Counter Management'),
+                        React.createElement('p', { style: { color: '#a1a1aa', fontSize: 14 } }, 'Current Next Order #: ' + currentCounter),
+                        React.createElement('button', { className: 'btn btn-blue', onClick: handleResetCounter }, '⚙️ Reset / Change Order Counter')
+                      ),
+                      React.createElement('div', { className: 'card' },
+                        React.createElement('h4', { style: { color: '#facc15', margin: '0 0 10px 0' } }, 'Manage Categories'),
+                        React.createElement('form', { onSubmit: handleAddCategory },
+                          React.createElement('input', { type: 'text', placeholder: 'New Category Name', value: newCategoryName, onChange: e => setNewCategoryName(e.target.value) }),
+                          React.createElement('button', { className: 'btn btn-green', type: 'submit', style: { width: '100%' } }, 'Add Category')
+                        ),
+                        React.createElement('div', { style: { marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' } },
+                          categories.map(c => React.createElement('span', { key: c, style: { background: '#27272a', padding: '4px 8px', borderRadius: 6, fontSize: 13 } }, c))
+                        )
+                      ),
+                      React.createElement('div', { className: 'card' },
+                        React.createElement('h4', { style: { color: '#facc15', margin: '0 0 10px 0' } }, 'Add Menu Item'),
+                        React.createElement('form', { onSubmit: handleAddMenuItem },
+                          React.createElement('input', { type: 'text', placeholder: 'Item Name', value: newItemName, onChange: e => setNewItemName(e.target.value) }),
+                          React.createElement('select', { value: newItemCat, onChange: e => setNewItemCat(e.target.value) }, categories.map(c => React.createElement('option', { key: c, value: c }, c))),
+                          React.createElement('input', { type: 'number', placeholder: 'Price (R)', value: newItemPrice, onChange: e => setNewItemPrice(e.target.value) }),
+                          React.createElement('button', { className: 'btn btn-green', type: 'submit', style: { width: '100%' } }, 'Add Item')
+                        )
+                      ),
+                      React.createElement('div', { className: 'card' },
+                        React.createElement('h4', { style: { color: '#facc15', margin: '0 0 10px 0' } }, 'Manage Menu Items'),
+                        menu.map(m => React.createElement('div', { key: m.id, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #27272a' } },
+                          React.createElement('span', null, m.name, ' (R', m.price, ')'),
+                          React.createElement('div', { style: { display: 'flex', gap: 6 } },
+                            React.createElement('button', { className: 'btn btn-blue', style: { padding: '4px 8px', fontSize: 12 }, onClick: () => handleEditMenuItem(m) }, 'Edit'),
+                            React.createElement('button', { className: 'btn btn-red', style: { padding: '4px 8px', fontSize: 12 }, onClick: () => handleDeleteMenuItem(m.id) }, 'Delete')
+                          )
+                        ))
+                      )
+                    ) : role === 'SALES' && isServerTab ? React.createElement('div', null,
+                      React.createElement('h3', { style: { color: '#facc15' } }, 'Live Sales Report'),
+                      React.createElement('div', { className: 'card', style: { background: '#047857', border: 'none' } },
+                        React.createElement('div', { style: { color: '#a7f3d0', fontSize: 14 } }, 'TOTAL SALES (CURRENT SESSION)'),
+                        React.createElement('div', { style: { color: '#ffffff', fontSize: 40, fontWeight: 'bold' } }, 'R', totalRandSales)
+                      ),
+                      React.createElement('div', { className: 'grid', style: { gridTemplateColumns: '1fr 1fr' } },
+                        sortedSalesItems.length > 0 && React.createElement('div', { className: 'card', style: { borderColor: '#10b981' } },
+                          React.createElement('h4', { style: { color: '#10b981', margin: '0 0 10px 0' } }, '🏆 Best Sellers'),
+                          sortedSalesItems.map(([name, qty], idx) => React.createElement('div', { key: idx, style: { display: 'flex', justifyContent: 'space-between', padding: '6px 0' } },
+                            React.createElement('span', { style: { fontWeight: 'bold' } }, name),
+                            React.createElement('span', { style: { backgroundColor: '#064e3b', color: '#6ee7b7', padding: '6px 12px', borderRadius: 8, fontSize: 14, fontWeight: 'bold' } }, qty, ' sold')
+                          ))
+                        ),
+                        sortedSalesItems.length > 0 && React.createElement('div', { className: 'card', style: { borderColor: '#ef4444' } },
+                          React.createElement('h4', { style: { color: '#ef4444', margin: '0 0 10px 0' } }, '📉 Least Sellers'),
+                          [...sortedSalesItems].reverse().map(([name, qty], idx) => React.createElement('div', { key: idx, style: { display: 'flex', justifyContent: 'space-between', padding: '6px 0' } },
+                            React.createElement('span', { style: { fontWeight: 'bold' } }, name),
+                            React.createElement('span', { style: { backgroundColor: '#7f1d1d', color: '#fca5a5', padding: '6px 12px', borderRadius: 8, fontSize: 14, fontWeight: 'bold' } }, qty, ' sold')
+                          ))
+                        )
+                      ),
+                      React.createElement('div', { className: 'card', style: { borderColor: '#3f3f46' } },
+                        React.createElement('h4', { style: { color: '#facc15', margin: '0 0 10px 0' } }, '📋 Session Item Breakdown'),
+                        sortedSalesItems.length === 0 ? React.createElement('div', { style: { color: '#a1a1aa' } }, 'No items sold in current session yet.') :
+                        sortedSalesItems.map(([name, qty], idx) => React.createElement('div', { key: idx, style: { display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #27272a' } },
+                          React.createElement('span', null, name),
+                          React.createElement('span', { style: { fontWeight: 'bold' } }, qty, ' sold')
+                        ))
+                      ),
+                      React.createElement('div', { className: 'card', style: { marginTop: 20 } },
+                        React.createElement('h4', { style: { color: '#facc15', margin: '0 0 10px 0' } }, '📁 Archived Daily Sales History'),
+                        dailySalesHistory.length === 0 ? React.createElement('div', { style: { color: '#a1a1aa' } }, 'No archived sales records found.') :
+                        [...dailySalesHistory].reverse().map((rep, idx) => React.createElement('div', { key: idx, style: { background: '#27272a', borderRadius: 8, padding: 12, marginBottom: 10 } },
+                          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', color: '#facc15', marginBottom: 6 } },
+                            React.createElement('span', null, '📅 ' + rep.date),
+                            React.createElement('span', null, 'R' + rep.total_rand + ' (' + rep.total_orders_count + ' orders)')
+                          ),
+                          React.createElement('div', { style: { fontSize: 13, color: '#4ade80' } }, '🏆 Best: ' + rep.best_seller),
+                          React.createElement('div', { style: { fontSize: 13, color: '#fca5a5' } }, '📉 Least: ' + rep.least_seller)
+                        ))
+                      )
+                    ) : role === 'DISPLAY' && isServerTab ? React.createElement('div', null,
+                      React.createElement('h3', { style: { color: '#facc15', marginBottom: 15 } }, 'Live Customer Status Board (3-Column View)'),
+                      React.createElement('div', { style: { marginBottom: 10 } },
+                        React.createElement('a', { href: '/display', target: '_blank', style: { color: '#facc15', fontWeight: 'bold', textDecoration: 'underline' } }, '🔗 Open Dedicated Full-Screen Display URL (/display)')
+                      ),
+                      React.createElement('div', { className: 'columns-grid' },
+                        React.createElement('div', { className: 'col received-col' },
+                          React.createElement('div', { className: 'col-title' }, 'RECEIVED'),
+                          React.createElement('div', { className: 'orders-grid' },
+                            receivedOrders.length === 0 ? React.createElement('div', { style: { textAlign: 'center', color: 'rgba(0,0,0,0.6)', fontSize: 14, marginTop: 20, gridColumn: 'span 4' } }, 'No orders') :
+                            receivedOrders.map(o => React.createElement('div', { key: o.num, className: 'order-box' }, '#' + o.num))
+                          )
+                        ),
+                        React.createElement('div', { className: 'col preparing-col' },
+                          React.createElement('div', { className: 'col-title' }, 'PREPARATION'),
+                          React.createElement('div', { className: 'orders-grid' },
+                            preparingOrders.length === 0 ? React.createElement('div', { style: { textAlign: 'center', color: 'rgba(0,0,0,0.6)', fontSize: 14, marginTop: 20, gridColumn: 'span 4' } }, 'No orders') :
+                            preparingOrders.map(o => React.createElement('div', { key: o.num, className: 'order-box' }, '#' + o.num))
+                          )
+                        ),
+                        React.createElement('div', { className: 'col ready-col' },
+                          React.createElement('div', { className: 'col-title' }, 'DONE / READY'),
+                          React.createElement('div', { className: 'orders-grid' },
+                            readyOrders.length === 0 ? React.createElement('div', { style: { textAlign: 'center', color: 'rgba(0,0,0,0.6)', fontSize: 14, marginTop: 20, gridColumn: 'span 4' } }, 'No orders') :
+                            readyOrders.map(o => React.createElement('div', { key: o.num, className: 'order-box' }, '#' + o.num))
+                          )
+                        )
+                      )
+                    ) : role === 'NUMBERS' ? React.createElement('div', null,
+                      React.createElement('h3', { style: { color: '#facc15' } }, 'Customer Contact List (Bulk SMS)'),
+                      React.createElement('div', { className: 'card' },
+                        React.createElement('h4', { style: { color: '#facc15', margin: '0 0 10px 0' } }, 'Compose Bulk SMS'),
+                        React.createElement('textarea', { rows: 4, placeholder: 'Enter your custom SMS message here...', value: bulkSmsMessage, onChange: e => setBulkSmsMessage(e.target.value) }),
+                        React.createElement('button', { className: 'btn btn-green', style: { width: '100%', marginTop: 10 }, onClick: sendBulkSms }, 'Send Bulk SMS')
+                      ),
+                      React.createElement('div', { className: 'card' },
+                        React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 } },
+                          React.createElement('h4', { style: { color: '#facc15', margin: 0 } }, 'Select Contacts (' + selectedPhones.size + ' selected)'),
+                          React.createElement('label', { style: { display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' } },
+                            React.createElement('input', { type: 'checkbox', checked: selectedPhones.size === phoneNumbers.length && phoneNumbers.length > 0, onChange: selectAllPhones }),
+                            'Select All'
+                          )
+                        ),
+                        phoneNumbers.map(phone => React.createElement('div', { key: phone, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '8px 0', borderBottom: '1px solid #27272a' } },
+                          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
+                            React.createElement('input', { type: 'checkbox', checked: selectedPhones.has(phone), onChange: () => togglePhoneSelection(phone), style: { width: 18, height: 18, margin: 0 } }),
+                            React.createElement('span', null, phone)
+                          ),
+                          React.createElement('button', {
+                            type: 'button',
+                            className: 'btn btn-red',
+                            style: { padding: '6px 12px', fontSize: 12 },
+                            onClick: () => handleDeletePhone(phone)
+                          }, 'Delete')
+                        ))
+                      )
+                    ) : React.createElement('div', null,
+                      React.createElement('h3', { style: { color: '#facc15' } }, 'Kitchen Live Orders'),
+                      activeKitchenOrders.length === 0 ? React.createElement('div', { className: 'card', style: { textAlign: 'center', color: '#71717a' } }, 'No active orders.') : React.createElement('div', { className: 'grid' },
+                        activeKitchenOrders.map(o => {
+                          const isDoneStage = o.status === 'done' || o.status === 'complete';
+                          const allItemsChecked = Array.isArray(o.items) && o.items.length > 0 && o.items.every(it => !!it.ticked);
+
+                          return React.createElement('div', { key: o.num, className: 'card', style: { borderLeft: '6px solid ' + (isDoneStage ? '#16a34a' : '#facc15') } },
+                            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', marginBottom: 6, alignItems: 'center' } },
+                              React.createElement('span', { style: { color: '#facc15', fontSize: 40 } }, 'ORDER #' + o.num),
+                              React.createElement('span', { className: 'badge' }, formatStageLabel(o.status))
+                            ),
+                            o.phone && React.createElement('div', { style: { fontSize: 40, fontWeight: 'bold', color: '#4ade80', marginBottom: 10 } }, '📱 ' + o.phone),
+                            o.items.map((it, idx) => React.createElement('div', { key: idx, onClick: () => toggleItemTick(o.num, idx), style: { padding: '10px 12px', marginBottom: 8, borderRadius: 6, background: it.ticked ? '#064e3b' : '#27272a', color: it.ticked ? '#6ee7b7' : '#fafafa', cursor: 'pointer', fontWeight: 'bold', fontSize: 24, display: 'flex', alignItems: 'center', gap: 12 } },
+                              React.createElement('input', { type: 'checkbox', checked: !!it.ticked, readOnly: true, style: { width: 22, height: 22, cursor: 'pointer', accentColor: '#16a34a' } }),
+                              React.createElement('span', null, it.qty + 'x ' + it.name)
+                            )),
+                            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', marginTop: 12, alignItems: 'center', paddingTop: 8, borderTop: '1px solid #27272a' } },
+                              React.createElement('span', { style: { fontWeight: 'bold', color: '#facc15' } }, 'R', o.total),
+                              React.createElement('div', { style: { display: 'flex', gap: 6 } },
+                                isDoneStage
+                                  ? React.createElement('button', { className: 'btn btn-blue', onClick: (e) => updateOrderStatus(e, o.num, 'collected') }, 'Collect')
+                                  : React.createElement(React.Fragment, null,
+                                      o.status !== 'preparing' && React.createElement('button', { className: 'btn btn-yellow', onClick: (e) => updateOrderStatus(e, o.num, 'preparing') }, 'Prepare'),
+                                      allItemsChecked && React.createElement('button', { className: 'btn btn-green', onClick: (e) => updateOrderStatus(e, o.num, 'done') }, 'Done')
+                                    )
+                              )
+                            )
+                          );
+                        })
+                      )
+                    )
+                  )
                 );
-                if (!sigMatches) {
-                    return false;
-                }
+              }
+              createRoot(document.getElementById('root')).render(React.createElement(App));
+            </script>
+          </body>
+          </html>
+          """
 
-                if (lastSeenStr == null || todayStr.compareTo(lastSeenStr) > 0) {
-                    prefs.edit().putString(KEY_LAST_SEEN_DATE, todayStr).apply();
-                }
+          class Handler(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  path = urlparse(self.path).path
+                  if path == '/display':
+                      self.send_response(200)
+                      self.send_header('Content-Type', 'text/html; charset=utf-8')
+                      self.send_header('Access-Control-Allow-Origin', '*')
+                      self.end_headers()
+                      self.wfile.write(DISPLAY_HTML.encode('utf-8'))
+                      return
 
-                return true;
-            }
+                  if path in ['/', '/app', '/order', '/kitchen', '/stock', '/setup', '/app.html']:
+                      self.send_response(200)
+                      self.send_header('Content-Type', 'text/html; charset=utf-8')
+                      self.send_header('Access-Control-Allow-Origin', '*')
+                      self.end_headers()
+                      self.wfile.write(HTML_CONTENT.encode('utf-8'))
+                      return
 
-            private static String computeShortHmac(String deviceId, String expiryStr) {
-                try {
-                    String cleanId = deviceId == null ? "" : deviceId.trim();
-                    String pepper = BuildConfig.LICENSE_PEPPER == null ? "" : BuildConfig.LICENSE_PEPPER.trim();
-                    String payload = cleanId + ":" + expiryStr + ":" + pepper;
-                    MessageDigest digest = MessageDigest.getInstance("SHA-256");
-                    byte[] hashBytes = digest.digest(payload.getBytes(StandardCharsets.UTF_8));
-                    String hex = bytesToHex(hashBytes).toUpperCase(Locale.US);
-                    return hex.substring(0, 12);
-                } catch (Exception e) {
-                    return "";
-                }
-            }
+                  if path == '/api/version':
+                      self.send_response(200)
+                      self.send_header('Content-Type', 'application/json')
+                      self.send_header('Access-Control-Allow-Origin', '*')
+                      self.end_headers()
+                      self.wfile.write(json.dumps({"version": APP_VERSION}).encode())
+                      return
 
-            private static Date getTodayDateOnly() {
-                String todayStr = new SimpleDateFormat("yyyyMMdd", Locale.US).format(new Date());
-                return parseYyyyMmDd(todayStr);
-            }
+                  if path == '/api/server_info':
+                      self.send_response(200)
+                      self.send_header('Content-Type', 'application/json')
+                      self.send_header('Access-Control-Allow-Origin', '*')
+                      self.end_headers()
+                      current_ip = _server_ip or detect_local_ip()
+                      self.wfile.write(json.dumps({"ip": current_ip, "port": PORT, "url": f"http://{current_ip}:{PORT}"}).encode())
+                      return
 
-            private static String formatYyyyMmDd(Date date) {
-                return new SimpleDateFormat("yyyyMMdd", Locale.US).format(date);
-            }
+                  if path == '/api/store_config':
+                      self.send_response(200)
+                      self.send_header('Content-Type', 'application/json')
+                      self.send_header('Access-Control-Allow-Origin', '*')
+                      self.end_headers()
+                      with lock:
+                          self.wfile.write(json.dumps(load_store_config()).encode())
+                      return
 
-            private static Date parseYyyyMmDd(String yyyymmdd) {
-                try {
-                    SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd", Locale.US);
-                    sdf.setLenient(false);
-                    return sdf.parse(yyyymmdd);
-                } catch (ParseException e) {
-                    return null;
-                }
-            }
+                  if path == '/api/sms_config':
+                      self.send_response(200)
+                      self.send_header('Content-Type', 'application/json')
+                      self.send_header('Access-Control-Allow-Origin', '*')
+                      self.end_headers()
+                      with lock:
+                          self.wfile.write(json.dumps(load_sms_config()).encode())
+                      return
 
-            private static String bytesToHex(byte[] bytes) {
-                StringBuilder sb = new StringBuilder(bytes.length * 2);
-                for (byte b : bytes) {
-                    sb.append(String.format(Locale.US, "%02x", b));
-                }
-                return sb.toString();
-            }
-        }
+                  if path == '/api/phones':
+                      self.send_response(200)
+                      self.send_header('Content-Type', 'application/json')
+                      self.send_header('Access-Control-Allow-Origin', '*')
+                      self.end_headers()
+                      with lock:
+                          unique_phones = get_cleaned_phones()
+                      self.wfile.write(json.dumps(unique_phones).encode())
+                      return
 
+                  if path == '/api/daily_sales':
+                      self.send_response(200)
+                      self.send_header('Content-Type', 'application/json')
+                      self.send_header('Access-Control-Allow-Origin', '*')
+                      self.end_headers()
+                      history = load_json_safe(F_SALES, [])
+                      if not isinstance(history, list):
+                          history = [history]
+                      self.wfile.write(json.dumps(history).encode())
+                      return
+
+                  api = {
+                      '/api/orders': orders,
+                      '/api/stock': stock,
+                      '/api/menu': menu,
+                      '/api/categories': categories,
+                      '/api/counter': {"counter": counter}
+                  }
+                  if path in api:
+                      self.send_response(200)
+                      self.send_header('Content-Type', 'application/json')
+                      self.send_header('Access-Control-Allow-Origin', '*')
+                      self.end_headers()
+                      with lock:
+                          self.wfile.write(json.dumps(api[path]).encode())
+                      return
+
+                  self.send_response(404)
+                  self.end_headers()
+
+              def do_POST(self):
+                  global orders, counter, stock, menu, categories
+                  p = urlparse(self.path).path
+                  cl = int(self.headers.get('Content-Length', 0))
+                  try:
+                      data = json.loads(self.rfile.read(cl).decode()) if cl > 0 else {}
+                      with lock:
+                          if p == '/api/phones/delete':
+                              updated_phones = delete_phone_number(data.get('phone', ''))
+                              self.send_response(200)
+                              self.send_header('Content-Type', 'application/json')
+                              self.send_header('Access-Control-Allow-Origin', '*')
+                              self.end_headers()
+                              self.wfile.write(json.dumps({"ok": True, "phones": updated_phones}).encode())
+                              return
+
+                          if p == '/api/store_config':
+                              saved = save_store_config(data.get('store_name', ''))
+                              self.send_response(200)
+                              self.send_header('Content-Type', 'application/json')
+                              self.send_header('Access-Control-Allow-Origin', '*')
+                              self.end_headers()
+                              self.wfile.write(json.dumps({"ok": True, **saved}).encode())
+                              return
+
+                          if p == '/api/sms_config':
+                              saved = save_sms_config(data.get('sms_enabled', False), data.get('winsms_key', ''))
+                              self.send_response(200)
+                              self.send_header('Content-Type', 'application/json')
+                              self.send_header('Access-Control-Allow-Origin', '*')
+                              self.end_headers()
+                              self.wfile.write(json.dumps({"ok": True, **saved}).encode())
+                              return
+
+                          if p == '/api/counter':
+                              if data.get('reset_day'):
+                                  archive_daily_sales()
+                                  orders = []
+                                  save(F_ORD, orders)
+
+                              counter = int(data.get('counter', counter))
+                              save(F_CNT, {"counter": counter})
+                              self.send_response(200)
+                              self.send_header('Content-Type', 'application/json')
+                              self.send_header('Access-Control-Allow-Origin', '*')
+                              self.end_headers()
+                              self.wfile.write(json.dumps({"ok": True, "counter": counter}).encode())
+                              return
+
+                          if p == '/api/orders':
+                              if not data.get('num'):
+                                  data['num'] = counter
+                                  counter += 1
+                                  save(F_CNT, {"counter": counter})
+                                  data['status'] = 'new'
+
+                                  items = data.get('items', [])
+                                  for item in items:
+                                      item_id = item.get('id')
+                                      qty = item.get('qty', 0)
+                                      if item_id in stock:
+                                          stock[item_id] = max(0, stock[item_id] - qty)
+                                  save(F_STK, stock)
+
+                              phone_number = clean_phone_number(data.get('phone', ''))
+                              if phone_number:
+                                  try:
+                                      existing = get_cleaned_phones()
+                                      if phone_number not in existing:
+                                          with open(F_PHN, "a", encoding='utf-8') as ph_file:
+                                              ph_file.write(phone_number + "\n")
+                                  except Exception:
+                                      pass
+
+                              sms_sent = False
+                              if data.get('trigger_sms'):
+                                  order_num = data.get('num')
+                                  st_name = load_store_config().get("store_name", "MY STORE")
+                                  sms_msg = f"Hi! Your {st_name} order #{order_num} is READY for collection. Please pick it up at {st_name}. Thank you!"
+                                  res_sms = send_sms(data.get('phone', ''), sms_msg)
+                                  sms_sent = bool(res_sms and res_sms.get("ok"))
+                                  data.pop('trigger_sms', None)
+
+                              target_num = data.get('num')
+                              new_orders = [o for o in orders if o.get('num') != target_num]
+                              orders = new_orders
+
+                              orders.append(data)
+                              save(F_ORD, orders)
+
+                              self.send_response(200)
+                              self.send_header('Content-Type', 'application/json')
+                              self.send_header('Access-Control-Allow-Origin', '*')
+                              self.end_headers()
+                              self.wfile.write(json.dumps({"ok": True, "num": data['num'], "sms_sent": sms_sent}).encode())
+                              return
+                          elif p == '/api/stock':
+                              stock = data
+                              save(F_STK, stock)
+                          elif p == '/api/menu':
+                              menu = data
+                              save(F_MEN, menu)
+                          elif p == '/api/categories':
+                              categories = data
+                              save(F_CAT, categories)
+                          elif p == '/api/bulk-sms':
+                              numbers = data.get('numbers', [])
+                              msg = data.get('message', '')
+                              sent_count = 0
+                              for num in numbers:
+                                  r = send_sms(num, msg)
+                                  if r and r.get("ok"):
+                                      sent_count += 1
+
+                              self.send_response(200)
+                              self.send_header('Content-Type', 'application/json')
+                              self.send_header('Access-Control-Allow-Origin', '*')
+                              self.end_headers()
+                              self.wfile.write(json.dumps({"ok": True, "sent_count": sent_count}).encode())
+                              return
+
+                      self.send_response(200)
+                      self.send_header('Content-Type', 'application/json')
+                      self.send_header('Access-Control-Allow-Origin', '*')
+                      self.end_headers()
+                      self.wfile.write(json.dumps({"ok": True}).encode())
+                  except Exception as e:
+                      self.send_response(400)
+                      self.end_headers()
+                      self.wfile.write(str(e).encode())
+
+              def do_OPTIONS(self):
+                  self.send_response(200)
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+                  self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+                  self.end_headers()
+
+              def log_message(self, *a): pass
+
+          def start_server():
+              global _server_started, _server_ip
+              with _server_guard_lock:
+                  if _server_started:
+                      return
+                  _server_started = True
+                  _server_ip = detect_local_ip()
+
+              def _run():
+                  try:
+                      server = ThreadingHTTPServer(('0.0.0.0', PORT), Handler)
+                      server.serve_forever()
+                  except Exception:
+                      pass
+
+              t = threading.Thread(target=_run, daemon=True)
+              t.start()
+
+          if __name__ in ("__main__", "pos_server"):
+              start_server()
+          PYEOF
+
+          cat << 'EOF' > gradle.properties
+          android.useAndroidX=true
+          android.enableJetifier=true
+          EOF
+
+          cat << 'EOF' > settings.gradle
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+                  maven { url 'https://chaquo.com/maven' }
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+                  maven { url 'https://chaquo.com/maven' }
+              }
+          }
+          rootProject.name = "VendorPOS"
+          include ':app'
+          EOF
+
+          cat << 'EOF' > build.gradle
+          buildscript {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+                  maven { url 'https://chaquo.com/maven' }
+              }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:8.2.2'
+                  classpath 'com.chaquo.python:gradle:17.2.0'
+              }
+          }
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+                  maven { url 'https://chaquo.com/maven' }
+              }
+          }
+          EOF
+
+          cat << 'EOF' > app/build.gradle
+          apply plugin: 'com.android.application'
+          apply plugin: 'com.chaquo.python'
+
+          android {
+              namespace 'org.chowdown.pos'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "org.chowdown.pos"
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 91112
+                  versionName "9.11.12"
+                  buildConfigField "String", "LICENSE_PEPPER", "\"${System.getenv("LICENSE_PEPPER") ?: "DEFAULT_CHANGE_IN_GITHUB_SECRETS"}\""
+
+                  ndk {
+                      abiFilters "arm64-v8a", "x86_64"
+                  }
+              }
+
+              signingConfigs {
+                  release {
+                      def storeFilePath = System.getenv("RELEASE_KEYSTORE_PATH")
+                      if (storeFilePath) {
+                          storeFile file("release.jks")
+                          storePassword System.getenv("KEYSTORE_PASSWORD") ?: ""
+                          keyAlias System.getenv("KEY_ALIAS") ?: ""
+                          keyPassword System.getenv("KEY_PASSWORD") ?: ""
+                      }
+                  }
+              }
+
+              buildFeatures {
+                  buildConfig true
+              }
+
+              buildTypes {
+                  debug {
+                      minifyEnabled false
+                  }
+                  release {
+                      minifyEnabled true
+                      signingConfig signingConfigs.release
+                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+                  }
+              }
+          }
+
+          chaquopy {
+              defaultConfig {
+                  version = "3.10"
+              }
+          }
+
+          dependencies {
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+              <application
+                  android:allowBackup="false"
+                  android:label="POS App"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.AppCompat.Light.NoActionBar"
+                  android:usesCleartextTraffic="true">
+                  <activity
+                      android:name=".MainActivity"
+                      android:configChanges="orientation|screenSize|keyboardHidden"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat << 'EOF' > app/src/main/java/org/chowdown/pos/MainActivity.java
+          package org.chowdown.pos;
+
+          import android.annotation.SuppressLint;
+          import android.app.AlertDialog;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.graphics.Color;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.provider.Settings;
+          import android.text.InputType;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.webkit.JsResult;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.widget.Button;
+          import android.widget.EditText;
+          import android.widget.FrameLayout;
+          import android.widget.LinearLayout;
+          import android.widget.ProgressBar;
+          import android.widget.TextView;
+          import android.widget.Toast;
+
+          import androidx.appcompat.app.AppCompatActivity;
+
+          import com.chaquo.python.PyException;
+          import com.chaquo.python.PyObject;
+          import com.chaquo.python.Python;
+          import com.chaquo.python.android.AndroidPlatform;
+
+          import java.io.File;
+          import java.net.InetSocketAddress;
+          import java.net.Socket;
+          import java.nio.charset.StandardCharsets;
+          import java.security.MessageDigest;
+          import java.text.ParseException;
+          import java.text.SimpleDateFormat;
+          import java.util.Date;
+          import java.util.Locale;
+          import java.util.concurrent.ExecutorService;
+          import java.util.concurrent.Executors;
+
+          public class MainActivity extends AppCompatActivity {
+
+              public static final String APP_VERSION = "v9.11.12";
+              private static final int LOCAL_PORT = 8080;
+
+              private final ExecutorService pythonExecutor = Executors.newCachedThreadPool();
+              private final Handler mainHandler = new Handler(Looper.getMainLooper());
+              private volatile boolean pythonStarted = false;
+              private volatile boolean pythonReady = false;
+
+              private FrameLayout rootLayout;
+              private LinearLayout loadingOverlay;
+              private ProgressBar spinner;
+              private TextView loadingText;
+              private Button retryButton;
+              private WebView webView;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+
+                  if (LicenseManager.isLicenseActive(this)) {
+                      startPosApp();
+                  } else {
+                      showActivationDialog();
+                  }
+              }
+
+              private void showActivationDialog() {
+                  String deviceId = LicenseManager.getDeviceId(this);
+
+                  AlertDialog.Builder builder = new AlertDialog.Builder(this);
+                  builder.setTitle("App Activation Required (" + APP_VERSION + ")");
+                  builder.setCancelable(false);
+
+                  LinearLayout container = new LinearLayout(this);
+                  container.setOrientation(LinearLayout.VERTICAL);
+                  int pad = (int) (18 * getResources().getDisplayMetrics().density);
+                  container.setPadding(pad, pad, pad, pad);
+
+                  TextView idLabel = new TextView(this);
+                  idLabel.setText("Device ID:\n" + deviceId);
+                  idLabel.setTextIsSelectable(true);
+                  idLabel.setPadding(0, 0, 0, pad / 2);
+                  container.addView(idLabel);
+
+                  final EditText keyInput = new EditText(this);
+                  keyInput.setHint("Enter license key (YYYYMMDD-XXXXXXXXXXXX)");
+                  keyInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
+                  container.addView(keyInput);
+
+                  builder.setView(container);
+
+                  builder.setPositiveButton("Activate", (dialog, which) -> {
+                      String enteredKey = keyInput.getText().toString().trim();
+                      LicenseManager.ValidationResult result = LicenseManager.activateKey(this, enteredKey);
+                      Toast.makeText(this, result.message, Toast.LENGTH_LONG).show();
+
+                      if (result.valid) {
+                          startPosApp();
+                      } else {
+                          showActivationDialog();
+                      }
+                  });
+
+                  builder.setNegativeButton("Exit", (dialog, which) -> finish());
+
+                  builder.show();
+              }
+
+              @SuppressLint("SetJavaScriptEnabled")
+              private void ensurePosViewsCreated() {
+                  if (rootLayout != null) {
+                      return;
+                  }
+
+                  rootLayout = new FrameLayout(this);
+
+                  webView = new WebView(this);
+                  WebSettings webSettings = webView.getSettings();
+                  webSettings.setJavaScriptEnabled(true);
+                  webSettings.setDomStorageEnabled(true);
+                  webSettings.setDatabaseEnabled(true);
+                  webSettings.setAllowFileAccess(true);
+                  webSettings.setAllowContentAccess(true);
+                  webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+
+                  webView.setWebChromeClient(new WebChromeClient() {
+                      @Override
+                      public boolean onJsAlert(WebView view, String url, String message, JsResult result) {
+                          if (isFinishing() || isDestroyed()) {
+                              result.cancel();
+                              return true;
+                          }
+                          new AlertDialog.Builder(MainActivity.this)
+                                  .setMessage(message)
+                                  .setPositiveButton("OK", (d, w) -> result.confirm())
+                                  .setOnCancelListener(d -> result.cancel())
+                                  .show();
+                          return true;
+                      }
+
+                      @Override
+                      public boolean onJsConfirm(WebView view, String url, String message, JsResult result) {
+                          if (isFinishing() || isDestroyed()) {
+                              result.cancel();
+                              return true;
+                          }
+                          new AlertDialog.Builder(MainActivity.this)
+                                  .setMessage(message)
+                                  .setPositiveButton("OK", (d, w) -> result.confirm())
+                                  .setNegativeButton("Cancel", (d, w) -> result.cancel())
+                                  .setOnCancelListener(d -> result.cancel())
+                                  .show();
+                          return true;
+                      }
+                  });
+
+                  webView.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                          return handleCustomSchemeUrl(request.getUrl() != null ? request.getUrl().toString() : "");
+                      }
+
+                      @Override
+                      public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                          return handleCustomSchemeUrl(url);
+                      }
+
+                      @Override
+                      public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                          super.onPageStarted(view, url, favicon);
+                          if (url != null && url.startsWith("http")) {
+                              showLoadingSpinner("Loading POS screen, please wait...", false);
+                          }
+                      }
+
+                      @Override
+                      public void onPageFinished(WebView view, String url) {
+                          super.onPageFinished(view, url);
+                          if (!pythonReady) {
+                              showLoadingSpinner("Finishing server startup, please wait...", false);
+                              return;
+                          }
+                          mainHandler.postDelayed(() -> {
+                              if (pythonReady && !isFinishing() && !isDestroyed()) {
+                                  hideLoadingSpinner();
+                              }
+                          }, 800);
+                      }
+
+                      @Override
+                      public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
+                          super.onReceivedError(view, errorCode, description, failingUrl);
+                          if (failingUrl != null && failingUrl.startsWith("rawbt:")) {
+                              handleCustomSchemeUrl(failingUrl);
+                              return;
+                          }
+                          if (!pythonReady) {
+                              showLoadingSpinner("Waiting for local POS server on port " + LOCAL_PORT + "...", true);
+                          }
+                      }
+                  });
+
+                  rootLayout.addView(
+                          webView,
+                          new FrameLayout.LayoutParams(
+                                  FrameLayout.LayoutParams.MATCH_PARENT,
+                                  FrameLayout.LayoutParams.MATCH_PARENT
+                          )
+                  );
+
+                  int pad = (int) (24 * getResources().getDisplayMetrics().density);
+                  loadingOverlay = new LinearLayout(this);
+                  loadingOverlay.setOrientation(LinearLayout.VERTICAL);
+                  loadingOverlay.setGravity(Gravity.CENTER);
+                  loadingOverlay.setBackgroundColor(Color.parseColor("#121212"));
+                  loadingOverlay.setPadding(pad, pad, pad, pad);
+                  loadingOverlay.setClickable(true);
+
+                  spinner = new ProgressBar(this);
+                  spinner.setIndeterminate(true);
+                  LinearLayout.LayoutParams spinnerParams = new LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.WRAP_CONTENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                  );
+                  spinnerParams.bottomMargin = (int) (16 * getResources().getDisplayMetrics().density);
+                  loadingOverlay.addView(spinner, spinnerParams);
+
+                  TextView titleView = new TextView(this);
+                  titleView.setText("Loading POS (" + APP_VERSION + ")");
+                  titleView.setTextColor(Color.WHITE);
+                  titleView.setTextSize(18f);
+                  titleView.setGravity(Gravity.CENTER);
+                  LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.WRAP_CONTENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                  );
+                  titleParams.bottomMargin = (int) (8 * getResources().getDisplayMetrics().density);
+                  loadingOverlay.addView(titleView, titleParams);
+
+                  loadingText = new TextView(this);
+                  loadingText.setText("Starting local POS server, please wait...");
+                  loadingText.setTextColor(Color.parseColor("#CCCCCC"));
+                  loadingText.setTextSize(14f);
+                  loadingText.setGravity(Gravity.CENTER);
+                  LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.WRAP_CONTENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                  );
+                  textParams.bottomMargin = (int) (18 * getResources().getDisplayMetrics().density);
+                  loadingOverlay.addView(loadingText, textParams);
+
+                  retryButton = new Button(this);
+                  retryButton.setText("Retry Startup");
+                  retryButton.setVisibility(View.GONE);
+                  retryButton.setOnClickListener(v -> {
+                      pythonStarted = false;
+                      pythonReady = false;
+                      startPythonAndLoadUrl("http://127.0.0.1:" + LOCAL_PORT);
+                  });
+                  loadingOverlay.addView(retryButton);
+
+                  rootLayout.addView(
+                          loadingOverlay,
+                          new FrameLayout.LayoutParams(
+                                  FrameLayout.LayoutParams.MATCH_PARENT,
+                                  FrameLayout.LayoutParams.MATCH_PARENT
+                          )
+                  );
+              }
+
+              private boolean handleCustomSchemeUrl(String url) {
+                  if (url != null && url.startsWith("rawbt:")) {
+                      try {
+                          Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                          intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                          startActivity(intent);
+                      } catch (Exception e) {
+                          Toast.makeText(
+                                  this,
+                                  "Please install and open RawBT to print receipts.",
+                                  Toast.LENGTH_LONG
+                          ).show();
+                      }
+                      return true;
+                  }
+                  return false;
+              }
+
+              private void showLoadingSpinner(String message, boolean showRetry) {
+                  runOnUiThread(() -> {
+                      if (loadingText != null && message != null) {
+                          loadingText.setText(message);
+                      }
+                      if (spinner != null) {
+                          spinner.setVisibility(showRetry ? View.GONE : View.VISIBLE);
+                      }
+                      if (retryButton != null) {
+                          retryButton.setVisibility(showRetry ? View.VISIBLE : View.GONE);
+                      }
+                      if (loadingOverlay != null) {
+                          loadingOverlay.setVisibility(View.VISIBLE);
+                      }
+                  });
+              }
+
+              private void hideLoadingSpinner() {
+                  runOnUiThread(() -> {
+                      if (loadingOverlay != null) {
+                          loadingOverlay.setVisibility(View.GONE);
+                      }
+                  });
+              }
+
+              private void startPosApp() {
+                  ensurePosViewsCreated();
+                  setContentView(rootLayout);
+                  showLoadingSpinner("Starting local POS server, please wait...", false);
+                  startPythonAndLoadUrl("http://127.0.0.1:" + LOCAL_PORT);
+              }
+
+              private boolean isPortOpen(String host, int port) {
+                  try (Socket socket = new Socket()) {
+                      socket.connect(new InetSocketAddress(host, port), 300);
+                      return true;
+                  } catch (Exception e) {
+                      return false;
+                  }
+              }
+
+              private void startPythonAndLoadUrl(String targetUrl) {
+                  if (pythonStarted && Python.isStarted() && pythonReady) {
+                      showLoadingSpinner("Opening POS screen...", false);
+                      webView.loadUrl(targetUrl);
+                      return;
+                  }
+
+                  showLoadingSpinner("Starting local POS server, please wait...", false);
+
+                  pythonExecutor.execute(() -> {
+                      final String[] startupError = new String[]{null};
+                      try {
+                          showLoadingSpinner("Initializing Python engine...", false);
+                          if (!Python.isStarted()) {
+                              Python.start(new AndroidPlatform(getApplicationContext()));
+                          }
+
+                          File dataDir = new File(getFilesDir(), "pos_data");
+                          if (!dataDir.exists()) {
+                              dataDir.mkdirs();
+                          }
+
+                          Python py = Python.getInstance();
+                          PyObject osModule = py.getModule("os");
+                          PyObject environ = osModule.get("environ");
+                          environ.callAttr("__setitem__", "POS_DATA_DIR", dataDir.getAbsolutePath());
+                          environ.callAttr("__setitem__", "POS_APP_VERSION", APP_VERSION);
+
+                          if (!pythonStarted) {
+                              pythonStarted = true;
+                              pythonExecutor.execute(() -> {
+                                  try {
+                                      PyObject module = py.getModule("pos_server");
+                                      if (module.containsKey("start_server")) {
+                                          module.callAttr("start_server");
+                                      } else if (module.containsKey("run_server")) {
+                                          module.callAttr("run_server");
+                                      } else if (module.containsKey("main")) {
+                                          module.callAttr("main");
+                                      }
+                                  } catch (Throwable t) {
+                                      startupError[0] = t.getMessage() != null ? t.getMessage() : t.toString();
+                                  }
+                              });
+                          }
+
+                          boolean portListening = false;
+                          for (int attempt = 0; attempt < 30; attempt++) {
+                              if (startupError[0] != null) {
+                                  break;
+                              }
+                              if (isPortOpen("127.0.0.1", LOCAL_PORT)) {
+                                  portListening = true;
+                                  break;
+                              }
+                              Thread.sleep(500);
+                          }
+
+                          if (!portListening) {
+                              pythonReady = false;
+                              pythonStarted = false;
+                              String detail = startupError[0] != null
+                                      ? "Python error: " + startupError[0]
+                                      : "Local server did not start on port " + LOCAL_PORT + ".";
+                              showLoadingSpinner(detail, true);
+                              return;
+                          }
+
+                          pythonReady = true;
+                          runOnUiThread(() -> {
+                              if (!isFinishing() && !isDestroyed() && webView != null) {
+                                  showLoadingSpinner("Opening POS screen...", false);
+                                  webView.loadUrl(targetUrl);
+                              }
+                          });
+                      } catch (PyException pyEx) {
+                          pythonStarted = false;
+                          final String err = pyEx.getMessage() != null ? pyEx.getMessage() : "Python error";
+                          showLoadingSpinner("Python startup error: " + err, true);
+                      } catch (Exception ex) {
+                          pythonStarted = false;
+                          final String err = ex.getMessage() != null ? ex.getMessage() : "Failed to start Python";
+                          showLoadingSpinner("Startup error: " + err, true);
+                      }
+                  });
+              }
+
+              @Override
+              protected void onDestroy() {
+                  super.onDestroy();
+                  pythonExecutor.shutdownNow();
+                  mainHandler.removeCallbacksAndMessages(null);
+              }
+
+              public static class LicenseManager {
+                  private static final String PREFS_NAME = "pos_license_prefs";
+                  private static final String KEY_SAVED_LICENSE = "saved_license_key";
+                  private static final String KEY_LAST_SEEN_DATE = "last_seen_date_yyyymmdd";
+                  private static final String[] WHITELISTED_DEVICE_IDS = {
+                          "Bddb4abb6d76b0e8"
+                  };
+
+                  public static class ValidationResult {
+                      public final boolean valid;
+                      public final String message;
+
+                      public ValidationResult(boolean valid, String message) {
+                          this.valid = valid;
+                          this.message = message;
+                      }
+                  }
+
+                  public static String getDeviceId(Context context) {
+                      String androidId = Settings.Secure.getString(
+                              context.getContentResolver(),
+                              Settings.Secure.ANDROID_ID
+                      );
+                      return androidId == null ? "unknown_device" : androidId.trim();
+                  }
+
+                  private static boolean isWhitelistedDevice(Context context) {
+                      String currentId = getDeviceId(context);
+                      for (String id : WHITELISTED_DEVICE_IDS) {
+                          if (id != null && id.trim().equalsIgnoreCase(currentId)) {
+                              return true;
+                          }
+                      }
+                      return false;
+                  }
+
+                  public static ValidationResult activateKey(Context context, String rawKey) {
+                      if (isWhitelistedDevice(context)) {
+                          String cleanKey = rawKey == null ? "" : rawKey.trim().toUpperCase(Locale.US);
+                          SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                          prefs.edit()
+                                  .putString(KEY_SAVED_LICENSE, cleanKey)
+                                  .putString(KEY_LAST_SEEN_DATE, formatYyyyMmDd(getTodayDateOnly()))
+                                  .apply();
+                          return new ValidationResult(true, "License activated successfully.");
+                      }
+
+                      if (rawKey == null || rawKey.trim().isEmpty()) {
+                          return new ValidationResult(false, "Please enter a license key.");
+                      }
+
+                      String normalizedKey = rawKey.trim().toUpperCase(Locale.US);
+                      String[] parts = normalizedKey.split("-");
+                      if (parts.length != 2) {
+                          return new ValidationResult(false, "Invalid key format.");
+                      }
+
+                      String expiryStr = parts[0].trim();
+                      String providedSig = parts[1].trim();
+
+                      if (!expiryStr.matches("\\d{8}") || providedSig.length() != 12) {
+                          return new ValidationResult(false, "Invalid key format or length.");
+                      }
+
+                      Date expiryDate = parseYyyyMmDd(expiryStr);
+                      Date todayDate = getTodayDateOnly();
+                      String todayStr = formatYyyyMmDd(todayDate);
+
+                      if (expiryDate == null) {
+                          return new ValidationResult(false, "Invalid expiration date in key.");
+                      }
+
+                      String expectedSig = computeShortHmac(getDeviceId(context), expiryStr);
+                      if (!MessageDigest.isEqual(
+                              expectedSig.getBytes(StandardCharsets.UTF_8),
+                              providedSig.getBytes(StandardCharsets.UTF_8))) {
+                          return new ValidationResult(false, "License key does not match this device.");
+                      }
+
+                      if (todayDate.after(expiryDate)) {
+                          return new ValidationResult(false, "This license key has expired.");
+                      }
+
+                      SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                      String lastSeenStr = prefs.getString(KEY_LAST_SEEN_DATE, null);
+                      if (lastSeenStr != null) {
+                          Date lastSeenDate = parseYyyyMmDd(lastSeenStr);
+                          if (lastSeenDate != null && todayDate.before(lastSeenDate)) {
+                              return new ValidationResult(false, "System clock change detected. Please check device date.");
+                          }
+                      }
+
+                      String updatedLastSeen = (lastSeenStr == null || todayStr.compareTo(lastSeenStr) > 0)
+                              ? todayStr
+                              : lastSeenStr;
+
+                      prefs.edit()
+                              .putString(KEY_SAVED_LICENSE, normalizedKey)
+                              .putString(KEY_LAST_SEEN_DATE, updatedLastSeen)
+                              .apply();
+
+                      return new ValidationResult(true, "License activated successfully.");
+                  }
+
+                  public static boolean isLicenseActive(Context context) {
+                      if (isWhitelistedDevice(context)) {
+                          return true;
+                      }
+
+                      SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                      Date todayDate = getTodayDateOnly();
+                      String todayStr = formatYyyyMmDd(todayDate);
+
+                      String lastSeenStr = prefs.getString(KEY_LAST_SEEN_DATE, null);
+                      if (lastSeenStr != null) {
+                          Date lastSeenDate = parseYyyyMmDd(lastSeenStr);
+                          if (lastSeenDate != null && todayDate.before(lastSeenDate)) {
+                              return false;
+                          }
+                      }
+
+                      String savedKey = prefs.getString(KEY_SAVED_LICENSE, null);
+                      if (savedKey == null || savedKey.isEmpty()) {
+                          return false;
+                      }
+
+                      String[] parts = savedKey.split("-");
+                      if (parts.length != 2) {
+                          return false;
+                      }
+
+                      String expiryStr = parts[0].trim();
+                      String savedSig = parts[1].trim();
+                      Date expiryDate = parseYyyyMmDd(expiryStr);
+                      if (expiryDate == null || todayDate.after(expiryDate)) {
+                          return false;
+                      }
+
+                      String expectedSig = computeShortHmac(getDeviceId(context), expiryStr);
+                      boolean sigMatches = MessageDigest.isEqual(
+                              expectedSig.getBytes(StandardCharsets.UTF_8),
+                              savedSig.getBytes(StandardCharsets.UTF_8)
+                      );
+                      if (!sigMatches) {
+                          return false;
+                      }
+
+                      if (lastSeenStr == null || todayStr.compareTo(lastSeenStr) > 0) {
+                          prefs.edit().putString(KEY_LAST_SEEN_DATE, todayStr).apply();
+                      }
+
+                      return true;
+                  }
+
+                  private static String computeShortHmac(String deviceId, String expiryStr) {
+                      try {
+                          String cleanId = deviceId == null ? "" : deviceId.trim();
+                          String pepper = BuildConfig.LICENSE_PEPPER == null ? "" : BuildConfig.LICENSE_PEPPER.trim();
+                          String payload = cleanId + ":" + expiryStr + ":" + pepper;
+                          MessageDigest digest = MessageDigest.getInstance("SHA-256");
+                          byte[] hashBytes = digest.digest(payload.getBytes(StandardCharsets.UTF_8));
+                          String hex = bytesToHex(hashBytes).toUpperCase(Locale.US);
+                          return hex.substring(0, 12);
+                      } catch (Exception e) {
+                          return "";
+                      }
+                  }
+
+                  private static Date getTodayDateOnly() {
+                      String todayStr = new SimpleDateFormat("yyyyMMdd", Locale.US).format(new Date());
+                      return parseYyyyMmDd(todayStr);
+                  }
+
+                  private static String formatYyyyMmDd(Date date) {
+                      return new SimpleDateFormat("yyyyMMdd", Locale.US).format(date);
+                  }
+
+                  private static Date parseYyyyMmDd(String yyyymmdd) {
+                      try {
+                          SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd", Locale.US);
+                          sdf.setLenient(false);
+                          return sdf.parse(yyyymmdd);
+                      } catch (ParseException e) {
+                          return null;
+                      }
+                  }
+
+                  private static String bytesToHex(byte[] bytes) {
+                      StringBuilder sb = new StringBuilder(bytes.length * 2);
+                      for (byte b : bytes) {
+                          sb.append(String.format(Locale.US, "%02x", b));
+                      }
+                      return sb.toString();
+                  }
+              }
+          }
+          EOF
+
+      - name: Decode Release Keystore
+        if: env.KEYSTORE_BASE64 != ''
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > app/release.jks
+
+      - name: Build Signed Release v9.11.12 APK
+        run: gradle assembleRelease --no-daemon
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VendorPOS_v9.11.12_APK
+          path: app/build/outputs/apk/release/*.apk
