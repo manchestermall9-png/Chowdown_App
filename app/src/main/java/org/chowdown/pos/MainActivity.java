@@ -1,86 +1,69 @@
-package Food.Order.App;
+package org.chowdown.pos;
 
-import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.AlertDialog;
-import android.bluetooth.BluetoothAdapter;
-import android.bluetooth.BluetoothDevice;
-import android.bluetooth.BluetoothManager;
-import android.bluetooth.BluetoothSocket;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
-import android.content.pm.PackageManager;
-import android.os.Build;
+import android.graphics.Color;
+import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.text.InputType;
-import android.webkit.JavascriptInterface;
+import android.view.Gravity;
+import android.view.View;
+import android.webkit.JsResult;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.activity.result.ActivityResultLauncher;
-import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.content.ContextCompat;
 
 import com.chaquo.python.PyException;
 import com.chaquo.python.PyObject;
 import com.chaquo.python.Python;
 import com.chaquo.python.android.AndroidPlatform;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
-
-import java.io.OutputStream;
+import java.io.File;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
 import java.util.Date;
-import java.util.List;
 import java.util.Locale;
-import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
 
     public static final String APP_VERSION = "v9.11.12";
-    private static final UUID SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
-    private static final String PRINTER_PREFS = "pos_printer_prefs";
-    private static final String KEY_SAVED_PRINTER_MAC = "saved_printer_mac";
-    private static final String KEY_SAVED_PRINTER_NAME = "saved_printer_name";
-    private static final int LINE_WIDTH_58MM = 32;
+    private static final int LOCAL_PORT = 8080;
+    private static final String RENEWAL_EMAIL = "willowton7@gmail.com";
 
-    private final ExecutorService printExecutor = Executors.newSingleThreadExecutor();
-    private final ExecutorService pythonExecutor = Executors.newSingleThreadExecutor();
-    private volatile boolean pythonServerStarted = false;
+    private final ExecutorService pythonExecutor = Executors.newCachedThreadPool();
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private volatile boolean pythonStarted = false;
+    private volatile boolean pythonReady = false;
+
+    private FrameLayout rootLayout;
+    private LinearLayout loadingOverlay;
+    private ProgressBar spinner;
+    private TextView loadingText;
+    private Button retryButton;
     private WebView webView;
-    private String pendingReceiptJson = null;
-
-    private final ActivityResultLauncher<String[]> bluetoothPermissionLauncher =
-            registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), result -> {
-                boolean connectGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.S
-                        || Boolean.TRUE.equals(result.get(Manifest.permission.BLUETOOTH_CONNECT));
-
-                if (connectGranted) {
-                    if (pendingReceiptJson != null) {
-                        String payload = pendingReceiptJson;
-                        pendingReceiptJson = null;
-                        initiatePrintWithSavedOrPickedPrinter(payload);
-                    }
-                } else {
-                    pendingReceiptJson = null;
-                    Toast.makeText(this, "Bluetooth permission is required to print receipts.", Toast.LENGTH_LONG).show();
-                }
-            });
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -136,351 +119,359 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private void startPosApp() {
-        if (webView == null) {
-            webView = new WebView(this);
-            WebSettings settings = webView.getSettings();
-            settings.setJavaScriptEnabled(true);
-            settings.setDomStorageEnabled(true);
-
-            webView.setWebViewClient(new WebViewClient());
-            webView.addJavascriptInterface(new PrinterBridge(), "AndroidPrinter");
+    private void ensurePosViewsCreated() {
+        if (rootLayout != null) {
+            return;
         }
 
-        setContentView(webView);
-        startChaquopyServerAndLoadUrl("http://127.0.0.1:8080");
+        rootLayout = new FrameLayout(this);
+
+        webView = new WebView(this);
+        WebSettings webSettings = webView.getSettings();
+        webSettings.setJavaScriptEnabled(true);
+        webSettings.setDomStorageEnabled(true);
+        webSettings.setDatabaseEnabled(true);
+        webSettings.setAllowFileAccess(true);
+        webSettings.setAllowContentAccess(true);
+        webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+
+        webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onJsAlert(WebView view, String url, String message, JsResult result) {
+                if (isFinishing() || isDestroyed()) {
+                    result.cancel();
+                    return true;
+                }
+                new AlertDialog.Builder(MainActivity.this)
+                        .setMessage(message)
+                        .setPositiveButton("OK", (d, w) -> result.confirm())
+                        .setOnCancelListener(d -> result.cancel())
+                        .show();
+                return true;
+            }
+
+            @Override
+            public boolean onJsConfirm(WebView view, String url, String message, JsResult result) {
+                if (isFinishing() || isDestroyed()) {
+                    result.cancel();
+                    return true;
+                }
+                new AlertDialog.Builder(MainActivity.this)
+                        .setMessage(message)
+                        .setPositiveButton("OK", (d, w) -> result.confirm())
+                        .setNegativeButton("Cancel", (d, w) -> result.cancel())
+                        .setOnCancelListener(d -> result.cancel())
+                        .show();
+                return true;
+            }
+        });
+
+        webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                return handleCustomSchemeUrl(request.getUrl() != null ? request.getUrl().toString() : "");
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                return handleCustomSchemeUrl(url);
+            }
+
+            @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                super.onPageStarted(view, url, favicon);
+                if (url != null && url.startsWith("http")) {
+                    showLoadingSpinner("Loading POS screen, please wait...", false);
+                }
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                if (!pythonReady) {
+                    showLoadingSpinner("Finishing server startup, please wait...", false);
+                    return;
+                }
+                mainHandler.postDelayed(() -> {
+                    if (pythonReady && !isFinishing() && !isDestroyed()) {
+                        hideLoadingSpinner();
+                    }
+                }, 800);
+            }
+
+            @Override
+            public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
+                super.onReceivedError(view, errorCode, description, failingUrl);
+                if (failingUrl != null && failingUrl.startsWith("rawbt:")) {
+                    handleCustomSchemeUrl(failingUrl);
+                    return;
+                }
+                if (!pythonReady) {
+                    showLoadingSpinner("Waiting for local POS server on port " + LOCAL_PORT + "...", true);
+                }
+            }
+        });
+
+        rootLayout.addView(
+                webView,
+                new FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT
+                )
+        );
+
+        int pad = (int) (24 * getResources().getDisplayMetrics().density);
+        loadingOverlay = new LinearLayout(this);
+        loadingOverlay.setOrientation(LinearLayout.VERTICAL);
+        loadingOverlay.setGravity(Gravity.CENTER);
+        loadingOverlay.setBackgroundColor(Color.parseColor("#121212"));
+        loadingOverlay.setPadding(pad, pad, pad, pad);
+        loadingOverlay.setClickable(true);
+
+        spinner = new ProgressBar(this);
+        spinner.setIndeterminate(true);
+        LinearLayout.LayoutParams spinnerParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        spinnerParams.bottomMargin = (int) (16 * getResources().getDisplayMetrics().density);
+        loadingOverlay.addView(spinner, spinnerParams);
+
+        TextView titleView = new TextView(this);
+        titleView.setText("Loading POS (" + APP_VERSION + ")");
+        titleView.setTextColor(Color.WHITE);
+        titleView.setTextSize(18f);
+        titleView.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        titleParams.bottomMargin = (int) (8 * getResources().getDisplayMetrics().density);
+        loadingOverlay.addView(titleView, titleParams);
+
+        loadingText = new TextView(this);
+        loadingText.setText("Starting local POS server, please wait...");
+        loadingText.setTextColor(Color.parseColor("#CCCCCC"));
+        loadingText.setTextSize(14f);
+        loadingText.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        textParams.bottomMargin = (int) (18 * getResources().getDisplayMetrics().density);
+        loadingOverlay.addView(loadingText, textParams);
+
+        retryButton = new Button(this);
+        retryButton.setText("Retry Startup");
+        retryButton.setVisibility(View.GONE);
+        retryButton.setOnClickListener(v -> {
+            pythonStarted = false;
+            pythonReady = false;
+            startPythonAndLoadUrl("http://127.0.0.1:" + LOCAL_PORT);
+        });
+        loadingOverlay.addView(retryButton);
+
+        rootLayout.addView(
+                loadingOverlay,
+                new FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT
+                )
+        );
     }
 
-    private void startChaquopyServerAndLoadUrl(String targetUrl) {
-        if (pythonServerStarted && Python.isStarted()) {
+    private boolean handleCustomSchemeUrl(String url) {
+        if (url != null && url.startsWith("rawbt:")) {
+            try {
+                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(intent);
+            } catch (Exception e) {
+                Toast.makeText(
+                        this,
+                        "Please install and open RawBT to print receipts.",
+                        Toast.LENGTH_LONG
+                ).show();
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private void showLoadingSpinner(String message, boolean showRetry) {
+        runOnUiThread(() -> {
+            if (loadingText != null && message != null) {
+                loadingText.setText(message);
+            }
+            if (spinner != null) {
+                spinner.setVisibility(showRetry ? View.GONE : View.VISIBLE);
+            }
+            if (retryButton != null) {
+                retryButton.setVisibility(showRetry ? View.VISIBLE : View.GONE);
+            }
+            if (loadingOverlay != null) {
+                loadingOverlay.setVisibility(View.VISIBLE);
+            }
+        });
+    }
+
+    private void hideLoadingSpinner() {
+        runOnUiThread(() -> {
+            if (loadingOverlay != null) {
+                loadingOverlay.setVisibility(View.GONE);
+            }
+        });
+    }
+
+    private String buildExpirationNotice(int daysLeft) {
+        if (daysLeft < 0 || daysLeft > 7) {
+            return null;
+        }
+        switch (daysLeft) {
+            case 7:
+                return "License notice: 7 days left before your activation key expires. Request a new activation code at " + RENEWAL_EMAIL + ".";
+            case 6:
+                return "License notice: 6 days left before your activation key expires. Request a new activation code at " + RENEWAL_EMAIL + ".";
+            case 5:
+                return "License notice: 5 days left before your activation key expires. Request a new activation code at " + RENEWAL_EMAIL + ".";
+            case 4:
+                return "License notice: 4 days left before your activation key expires. Request a new activation code at " + RENEWAL_EMAIL + ".";
+            case 3:
+                return "License notice: 3 days left before your activation key expires. Request a new activation code at " + RENEWAL_EMAIL + ".";
+            case 2:
+                return "License notice: 2 days left before your activation key expires. Request a new activation code at " + RENEWAL_EMAIL + ".";
+            case 1:
+                return "Urgent notice: Your activation key expires in 1 day (tomorrow)! Request a new code at " + RENEWAL_EMAIL + ".";
+            case 0:
+            default:
+                return "FINAL WARNING: Your activation key expires TODAY and the app will cease to work if not renewed! Contact " + RENEWAL_EMAIL + " for a new code.";
+        }
+    }
+
+    private void startPosApp() {
+        ensurePosViewsCreated();
+        setContentView(rootLayout);
+
+        int daysLeft = LicenseManager.getDaysUntilExpiration(this);
+        String notice = buildExpirationNotice(daysLeft);
+        if (notice != null) {
+            Toast.makeText(this, notice, Toast.LENGTH_LONG).show();
+        }
+
+        showLoadingSpinner("Starting local POS server, please wait...", false);
+        startPythonAndLoadUrl("http://127.0.0.1:" + LOCAL_PORT);
+    }
+
+    private boolean isPortOpen(String host, int port) {
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(host, port), 300);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void startPythonAndLoadUrl(String targetUrl) {
+        if (pythonStarted && Python.isStarted() && pythonReady) {
+            showLoadingSpinner("Opening POS screen...", false);
             webView.loadUrl(targetUrl);
             return;
         }
 
+        showLoadingSpinner("Starting local POS server, please wait...", false);
+
         pythonExecutor.execute(() -> {
+            final String[] startupError = new String[]{null};
             try {
+                showLoadingSpinner("Initializing Python engine...", false);
                 if (!Python.isStarted()) {
                     Python.start(new AndroidPlatform(getApplicationContext()));
                 }
 
-                if (!pythonServerStarted) {
-                    Python py = Python.getInstance();
-                    PyObject module = py.getModule("server");
-                    if (module.containsKey("start_server")) {
-                        module.callAttr("start_server");
-                    } else if (module.containsKey("main")) {
-                        module.callAttr("main");
+                File dataDir = new File(getFilesDir(), "pos_data");
+                if (!dataDir.exists()) {
+                    dataDir.mkdirs();
+                }
+
+                Python py = Python.getInstance();
+                PyObject osModule = py.getModule("os");
+                PyObject environ = osModule.get("environ");
+                environ.callAttr("__setitem__", "POS_DATA_DIR", dataDir.getAbsolutePath());
+                environ.callAttr("__setitem__", "POS_APP_VERSION", APP_VERSION);
+
+                if (!pythonStarted) {
+                    pythonStarted = true;
+                    pythonExecutor.execute(() -> {
+                        try {
+                            PyObject module = py.getModule("pos_server");
+                            if (module.containsKey("start_server")) {
+                                module.callAttr("start_server");
+                            } else if (module.containsKey("run_server")) {
+                                module.callAttr("run_server");
+                            } else if (module.containsKey("main")) {
+                                module.callAttr("main");
+                            }
+                        } catch (Throwable t) {
+                            startupError[0] = t.getMessage() != null ? t.getMessage() : t.toString();
+                        }
+                    });
+                }
+
+                boolean portListening = false;
+                for (int attempt = 0; attempt < 30; attempt++) {
+                    if (startupError[0] != null) {
+                        break;
                     }
-                    pythonServerStarted = true;
+                    if (isPortOpen("127.0.0.1", LOCAL_PORT)) {
+                        portListening = true;
+                        break;
+                    }
+                    Thread.sleep(500);
                 }
 
-                Thread.sleep(500);
-            } catch (PyException pyEx) {
-                final String err = pyEx.getMessage() != null ? pyEx.getMessage() : "Python startup error";
-                runOnUiThread(() ->
-                        Toast.makeText(MainActivity.this, "Python error: " + err, Toast.LENGTH_LONG).show()
-                );
-            } catch (Exception ex) {
-                final String err = ex.getMessage() != null ? ex.getMessage() : "Failed to start Python";
-                runOnUiThread(() ->
-                        Toast.makeText(MainActivity.this, "Startup error: " + err, Toast.LENGTH_LONG).show()
-                );
-            }
-
-            runOnUiThread(() -> {
-                if (!isFinishing() && !isDestroyed() && webView != null) {
-                    webView.loadUrl(targetUrl);
-                }
-            });
-        });
-    }
-
-    public class PrinterBridge {
-        @JavascriptInterface
-        public void printReceipt(String receiptJson) {
-            runOnUiThread(() -> requestPrint(receiptJson));
-        }
-
-        @JavascriptInterface
-        public void choosePrinter() {
-            runOnUiThread(() -> {
-                if (!hasBluetoothConnectPermission()) {
-                    pendingReceiptJson = null;
-                    requestBluetoothPermissions();
+                if (!portListening) {
+                    pythonReady = false;
+                    pythonStarted = false;
+                    String detail = startupError[0] != null
+                            ? "Python error: " + startupError[0]
+                            : "Local server did not start on port " + LOCAL_PORT + ".";
+                    showLoadingSpinner(detail, true);
                     return;
                 }
-                showPairedPrinterPicker(null);
-            });
-        }
-    }
 
-    private void requestPrint(String receiptJson) {
-        if (!hasBluetoothConnectPermission()) {
-            pendingReceiptJson = receiptJson;
-            requestBluetoothPermissions();
-            return;
-        }
-        initiatePrintWithSavedOrPickedPrinter(receiptJson);
-    }
-
-    private boolean hasBluetoothConnectPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            return ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
-                    == PackageManager.PERMISSION_GRANTED;
-        }
-        return true;
-    }
-
-    private void requestBluetoothPermissions() {
-        List<String> needed = new ArrayList<>();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
-                    != PackageManager.PERMISSION_GRANTED) {
-                needed.add(Manifest.permission.BLUETOOTH_CONNECT);
-            }
-        } else {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH)
-                    != PackageManager.PERMISSION_GRANTED) {
-                needed.add(Manifest.permission.BLUETOOTH);
-            }
-        }
-
-        if (needed.isEmpty()) {
-            if (pendingReceiptJson != null) {
-                String payload = pendingReceiptJson;
-                pendingReceiptJson = null;
-                initiatePrintWithSavedOrPickedPrinter(payload);
-            }
-        } else {
-            bluetoothPermissionLauncher.launch(needed.toArray(new String[0]));
-        }
-    }
-
-    @SuppressLint("MissingPermission")
-    private BluetoothAdapter getBluetoothAdapterSafe() {
-        BluetoothManager manager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
-        return manager != null ? manager.getAdapter() : BluetoothAdapter.getDefaultAdapter();
-    }
-
-    @SuppressLint("MissingPermission")
-    private void initiatePrintWithSavedOrPickedPrinter(String receiptJson) {
-        BluetoothAdapter adapter = getBluetoothAdapterSafe();
-        if (adapter == null) {
-            Toast.makeText(this, "This device does not support Bluetooth.", Toast.LENGTH_LONG).show();
-            return;
-        }
-        if (!adapter.isEnabled()) {
-            Toast.makeText(this, "Please turn on Bluetooth first.", Toast.LENGTH_LONG).show();
-            return;
-        }
-
-        SharedPreferences prefs = getSharedPreferences(PRINTER_PREFS, MODE_PRIVATE);
-        String savedMac = prefs.getString(KEY_SAVED_PRINTER_MAC, null);
-
-        if (savedMac != null && !savedMac.isEmpty()) {
-            Set<BluetoothDevice> bonded = adapter.getBondedDevices();
-            if (bonded != null) {
-                for (BluetoothDevice device : bonded) {
-                    if (savedMac.equalsIgnoreCase(device.getAddress())) {
-                        sendReceiptToDevice(device, receiptJson);
-                        return;
-                    }
-                }
-            }
-        }
-
-        showPairedPrinterPicker(receiptJson);
-    }
-
-    @SuppressLint("MissingPermission")
-    private void showPairedPrinterPicker(String receiptJson) {
-        BluetoothAdapter adapter = getBluetoothAdapterSafe();
-        if (adapter == null || !adapter.isEnabled()) {
-            Toast.makeText(this, "Turn on Bluetooth and pair your 58mm printer first.", Toast.LENGTH_LONG).show();
-            return;
-        }
-
-        Set<BluetoothDevice> bondedSet = adapter.getBondedDevices();
-        List<BluetoothDevice> pairedDevices = bondedSet != null
-                ? new ArrayList<>(bondedSet)
-                : new ArrayList<>();
-
-        if (pairedDevices.isEmpty()) {
-            Toast.makeText(this, "No paired Bluetooth printer found. Pair it in Android Bluetooth settings first.", Toast.LENGTH_LONG).show();
-            return;
-        }
-
-        String[] labels = new String[pairedDevices.size()];
-        for (int i = 0; i < pairedDevices.size(); i++) {
-            BluetoothDevice d = pairedDevices.get(i);
-            String name = d.getName() != null ? d.getName() : "Unknown Printer";
-            labels[i] = name + " (" + d.getAddress() + ")";
-        }
-
-        new AlertDialog.Builder(this)
-                .setTitle("Select 58mm Bluetooth Printer")
-                .setItems(labels, (dialog, which) -> {
-                    BluetoothDevice chosen = pairedDevices.get(which);
-                    String chosenName = chosen.getName() != null ? chosen.getName() : "Thermal Printer";
-                    getSharedPreferences(PRINTER_PREFS, MODE_PRIVATE)
-                            .edit()
-                            .putString(KEY_SAVED_PRINTER_MAC, chosen.getAddress())
-                            .putString(KEY_SAVED_PRINTER_NAME, chosenName)
-                            .apply();
-
-                    if (receiptJson != null) {
-                        sendReceiptToDevice(chosen, receiptJson);
-                    } else {
-                        Toast.makeText(this, "Saved printer: " + chosenName, Toast.LENGTH_SHORT).show();
-                    }
-                })
-                .setNegativeButton("Cancel", null)
-                .show();
-    }
-
-    @SuppressLint("MissingPermission")
-    private void sendReceiptToDevice(BluetoothDevice device, String receiptJson) {
-        Toast.makeText(this, "Printing to " + (device.getName() != null ? device.getName() : "printer") + "...", Toast.LENGTH_SHORT).show();
-
-        printExecutor.execute(() -> {
-            BluetoothSocket socket = null;
-            try {
-                BluetoothAdapter adapter = getBluetoothAdapterSafe();
-                if (adapter != null && adapter.isDiscovering()) {
-                    adapter.cancelDiscovery();
-                }
-
-                socket = device.createRfcommSocketToServiceRecord(SPP_UUID);
-                socket.connect();
-
-                byte[] payload = buildEscPos58mmReceipt(receiptJson);
-                OutputStream out = socket.getOutputStream();
-                out.write(payload);
-                out.flush();
-
-                try {
-                    Thread.sleep(350);
-                } catch (InterruptedException ignored) {
-                }
-
-                runOnUiThread(() ->
-                        Toast.makeText(MainActivity.this, "Receipt sent to printer.", Toast.LENGTH_SHORT).show()
-                );
-            } catch (Exception e) {
-                final String errMsg = e.getMessage() != null ? e.getMessage() : "Connection failed";
+                pythonReady = true;
                 runOnUiThread(() -> {
-                    Toast.makeText(MainActivity.this, "Print failed: " + errMsg, Toast.LENGTH_LONG).show();
-                    getSharedPreferences(PRINTER_PREFS, MODE_PRIVATE).edit().remove(KEY_SAVED_PRINTER_MAC).apply();
-                });
-            } finally {
-                if (socket != null) {
-                    try {
-                        socket.close();
-                    } catch (Exception ignored) {
+                    if (!isFinishing() && !isDestroyed() && webView != null) {
+                        showLoadingSpinner("Opening POS screen...", false);
+                        webView.loadUrl(targetUrl);
                     }
-                }
+                });
+            } catch (PyException pyEx) {
+                pythonStarted = false;
+                final String err = pyEx.getMessage() != null ? pyEx.getMessage() : "Python error";
+                showLoadingSpinner("Python startup error: " + err, true);
+            } catch (Exception ex) {
+                pythonStarted = false;
+                final String err = ex.getMessage() != null ? ex.getMessage() : "Failed to start Python";
+                showLoadingSpinner("Startup error: " + err, true);
             }
         });
-    }
-
-    private byte[] buildEscPos58mmReceipt(String receiptJson) throws Exception {
-        JSONObject obj = new JSONObject(receiptJson);
-        String storeName = obj.optString("storeName", "ORDER RECEIPT");
-        String orderNum = obj.optString("orderNum", "");
-        String phone = obj.optString("phone", "");
-        String timeStr = obj.optString("timeStr", "");
-        String deviceLabel = obj.optString("device", "DEVICE");
-        String totalStr = obj.optString("total", "0");
-        JSONArray items = obj.optJSONArray("items");
-
-        StringBuilder sb = new StringBuilder();
-        sb.append("\u001b@");
-        sb.append("\u001ba\u0001");
-        sb.append("\u001bE\u0001\u001d!\u0011");
-        sb.append("ORDER #").append(orderNum).append("\n");
-        sb.append("\u001d!\u0000\u001bE\u0001");
-        sb.append(fitLine(storeName, LINE_WIDTH_58MM)).append("\n");
-        if (!phone.isEmpty()) {
-            sb.append(fitLine("CELL: " + phone, LINE_WIDTH_58MM)).append("\n");
-        }
-        sb.append("\u001bE\u0000");
-
-        sb.append("\u001ba\u0000");
-        sb.append(repeatChar('-', LINE_WIDTH_58MM)).append("\n");
-        if (!timeStr.isEmpty() || !deviceLabel.isEmpty()) {
-            sb.append(fitLine(timeStr + "  " + deviceLabel, LINE_WIDTH_58MM)).append("\n");
-            sb.append(repeatChar('-', LINE_WIDTH_58MM)).append("\n");
-        }
-
-        if (items != null) {
-            for (int i = 0; i < items.length(); i++) {
-                JSONObject item = items.getJSONObject(i);
-                int qty = item.optInt("qty", 1);
-                String name = item.optString("name", "Item");
-                double lineTotal = item.optDouble("lineTotal", item.optDouble("price", 0) * qty);
-                String rightAmt = "R" + formatRand(lineTotal);
-                String leftPart = qty + "x " + name;
-                sb.append(formatColumns(leftPart, rightAmt, LINE_WIDTH_58MM)).append("\n");
-            }
-        }
-
-        sb.append(repeatChar('=', LINE_WIDTH_58MM)).append("\n");
-        sb.append("\u001bE\u0001\u001d!\u0001");
-        sb.append(formatColumns("TOTAL", "R" + totalStr, LINE_WIDTH_58MM)).append("\n");
-        sb.append("\u001d!\u0000\u001bE\u0000");
-        sb.append(repeatChar('=', LINE_WIDTH_58MM)).append("\n");
-
-        sb.append("\u001ba\u0001");
-        sb.append(fitLine("Thank you for your order!", LINE_WIDTH_58MM)).append("\n");
-        sb.append("\n\n\n");
-
-        return sb.toString().getBytes(StandardCharsets.ISO_8859_1);
-    }
-
-    private String fitLine(String text, int maxLen) {
-        if (text == null) return "";
-        String clean = text.trim();
-        return clean.length() <= maxLen ? clean : clean.substring(0, maxLen);
-    }
-
-    private String formatColumns(String left, String right, int width) {
-        String l = left != null ? left.trim() : "";
-        String r = right != null ? right.trim() : "";
-        if (l.length() + r.length() + 1 > width) {
-            int allowedLeft = Math.max(1, width - r.length() - 1);
-            l = l.substring(0, Math.min(l.length(), allowedLeft));
-        }
-        int spaces = Math.max(1, width - l.length() - r.length());
-        return l + repeatChar(' ', spaces) + r;
-    }
-
-    private String formatRand(double amount) {
-        if (Math.abs(amount - Math.round(amount)) < 0.005) {
-            return String.valueOf(Math.round(amount));
-        }
-        return String.format(Locale.US, "%.2f", amount);
-    }
-
-    private String repeatChar(char ch, int count) {
-        StringBuilder b = new StringBuilder(count);
-        for (int i = 0; i < count; i++) {
-            b.append(ch);
-        }
-        return b.toString();
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        printExecutor.shutdownNow();
         pythonExecutor.shutdownNow();
+        mainHandler.removeCallbacksAndMessages(null);
     }
 
     public static class LicenseManager {
         private static final String PREFS_NAME = "pos_license_prefs";
         private static final String KEY_SAVED_LICENSE = "saved_license_key";
         private static final String KEY_LAST_SEEN_DATE = "last_seen_date_yyyymmdd";
-        private static final String WHITELISTED_DEVICE_ID = "e65012f256e4264b";
+        private static final String[] WHITELISTED_DEVICE_IDS = {
+                "Bddb4abb6d76b0e8"
+        };
 
         public static class ValidationResult {
             public final boolean valid;
@@ -501,7 +492,13 @@ public class MainActivity extends AppCompatActivity {
         }
 
         private static boolean isWhitelistedDevice(Context context) {
-            return WHITELISTED_DEVICE_ID.equalsIgnoreCase(getDeviceId(context));
+            String currentId = getDeviceId(context);
+            for (String id : WHITELISTED_DEVICE_IDS) {
+                if (id != null && id.trim().equalsIgnoreCase(currentId)) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         public static ValidationResult activateKey(Context context, String rawKey) {
@@ -622,10 +619,37 @@ public class MainActivity extends AppCompatActivity {
             return true;
         }
 
+        public static int getDaysUntilExpiration(Context context) {
+            if (isWhitelistedDevice(context)) {
+                return Integer.MAX_VALUE;
+            }
+
+            SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+            String savedKey = prefs.getString(KEY_SAVED_LICENSE, null);
+            if (savedKey == null || savedKey.trim().isEmpty()) {
+                return -1;
+            }
+
+            String[] parts = savedKey.trim().toUpperCase(Locale.US).split("-");
+            if (parts.length != 2) {
+                return -1;
+            }
+
+            Date expiryDate = parseYyyyMmDd(parts[0].trim());
+            Date todayDate = getTodayDateOnly();
+            if (expiryDate == null || todayDate == null) {
+                return -1;
+            }
+
+            long diffMillis = expiryDate.getTime() - todayDate.getTime();
+            return (int) (diffMillis / (1000L * 60L * 60L * 24L));
+        }
+
         private static String computeShortHmac(String deviceId, String expiryStr) {
             try {
                 String cleanId = deviceId == null ? "" : deviceId.trim();
-                String payload = cleanId + ":" + expiryStr;
+                String pepper = BuildConfig.LICENSE_PEPPER == null ? "" : BuildConfig.LICENSE_PEPPER.trim();
+                String payload = cleanId + ":" + expiryStr + ":" + pepper;
                 MessageDigest digest = MessageDigest.getInstance("SHA-256");
                 byte[] hashBytes = digest.digest(payload.getBytes(StandardCharsets.UTF_8));
                 String hex = bytesToHex(hashBytes).toUpperCase(Locale.US);
