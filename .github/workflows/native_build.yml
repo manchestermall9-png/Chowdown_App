@@ -54,7 +54,6 @@ jobs:
 # =========================================================
 # POS / KITCHEN SYSTEM - VERSION v9.11.12
 # =========================================================
-
 import json, os, threading, socket, urllib.request, datetime
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
