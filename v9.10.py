@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 PORT = 8080
 WINSMS_KEY = "B9884ACB-743B-406C-8966-7CAD50C4858D"
 TEST_PHONE = "0837869000"
-DIR = os.path.dirname(os.path.abspath(__file__)) or "/storage/emulated/0/ChowDown_Test"
+DIR = os.environ.get("POS_DATA_DIR") or os.path.dirname(os.path.abspath(__file__)) or "/storage/emulated/0/ChowDown_Test"
 os.makedirs(DIR, exist_ok=True)
 os.chdir(DIR)
 
@@ -39,7 +39,7 @@ try:
     if os.path.exists(F_MEN): menu = json.load(open(F_MEN))
     if os.path.exists(F_CAT): categories = json.load(open(F_CAT))
     if os.path.exists(F_CNT): counter = json.load(open(F_CNT)).get("counter", 1)
-except: 
+except:
     pass
 
 # Ensure test number is pre-populated in phone_numbers.txt
@@ -56,10 +56,10 @@ except Exception as e:
 
 lock = threading.Lock()
 
-def save(f, d): 
-    try: 
+def save(f, d):
+    try:
         json.dump(d, open(f, 'w'))
-    except: 
+    except:
         pass
 
 def archive_daily_sales():
@@ -67,7 +67,7 @@ def archive_daily_sales():
     try:
         if not orders:
             return
-        
+
         total_rand = 0
         item_counts = {}
 
@@ -101,7 +101,7 @@ def archive_daily_sales():
                 if not isinstance(history, list): history = [history]
             except:
                 history = []
-        
+
         history.append(report)
         save(F_SALES, history)
         print(f"[DAILY SALES ARCHIVED] Total: R{total_rand} | Best: {best_item} | Least: {least_item}")
@@ -121,14 +121,14 @@ def send_sms(phone, msg):
     if p.startswith('0') and len(p) == 10: p = '27' + p[1:]
     def go():
         try:
-            req = urllib.request.Request("https://api.winsms.co.za/api/rest/v1/sms/outgoing/send", 
+            req = urllib.request.Request("https://api.winsms.co.za/api/rest/v1/sms/outgoing/send",
                 data=json.dumps({"message": str(msg), "recipients": [{"mobileNumber": p}]}).encode(), method='POST')
             req.add_header('AUTHORIZATION', WINSMS_KEY)
             req.add_header('Content-Type', 'application/json')
             req.add_header('Accept', 'application/json')
             res = urllib.request.urlopen(req, timeout=10).read().decode()
             print(f"[WINSMS SUCCESS] Sent to {p}. Response: {res}")
-        except Exception as e: 
+        except Exception as e:
             print(f"[WINSMS ERROR] {e}")
     threading.Thread(target=go, daemon=True).start()
 
@@ -177,7 +177,7 @@ DISPLAY_HTML = """<!DOCTYPE html>
       }, []);
 
       const activeOrders = orders.filter(o => o.status !== 'collected').sort((a,b) => a.num - b.num);
-      
+
       const receivedOrders = activeOrders.filter(o => o.status === 'new' || !o.status);
       const preparingOrders = activeOrders.filter(o => o.status === 'preparing');
       const readyOrders = activeOrders.filter(o => o.status === 'complete');
@@ -290,22 +290,22 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         const fetchData = async () => {
           try {
-            const res = await fetch('/api/orders'); 
+            const res = await fetch('/api/orders');
             if (res.ok) {
               setOrders(await res.json());
               setIsOnline(true);
             } else {
               setIsOnline(false);
             }
-            
+
             const sRes = await fetch('/api/stock'); if (sRes.ok) setStock(await sRes.json());
             const mRes = await fetch('/api/menu'); if (mRes.ok) setMenu(await mRes.json());
             const cRes = await fetch('/api/categories'); if (cRes.ok) setCategories(await cRes.json());
-            
+
             const cntRes = await fetch('/api/counter');
-            if (cntRes.ok) { 
-              const cntData = await cntRes.json(); 
-              setCurrentCounter(cntData.counter); 
+            if (cntRes.ok) {
+              const cntData = await cntRes.json();
+              setCurrentCounter(cntData.counter);
             }
 
             const pRes = await fetch('/api/phones');
@@ -343,31 +343,31 @@ HTML_CONTENT = """<!DOCTYPE html>
 
       const triggerPrint = (orderNum, itemsList, totalVal, phoneVal) => {
         const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        
+
         const ESC = '\\x1b';
-        const bigBoldOn = ESC + '!' + '\\x38';      
-        const twiceBoldOn = ESC + '!' + '\\x10';    
+        const bigBoldOn = ESC + '!' + '\\x38';
+        const twiceBoldOn = ESC + '!' + '\\x10';
         const boldOn = ESC + 'E' + '\\x01';
         const resetSize = ESC + '!' + '\\x00';
 
         let text = `${bigBoldOn}      ORDER #${orderNum}\\n${resetSize}`;
-        
+
         if (phoneVal && phoneVal.trim() !== '') {
           text += `${twiceBoldOn}    CELL: ${phoneVal.trim()}\\n${resetSize}`;
         }
 
         text += `${boldOn}================================\\n       CHOW DOWN MOBILE       \\n================================\\nTime: ${timeStr} | Device: ${device}\\n--------------------------------\\n${resetSize}`;
-        
-        itemsList.forEach(i => { 
-          text += `${twiceBoldOn}${i.qty}x ${i.name}\\n   @ R${i.price} each = R${i.qty * i.price}\\n${resetSize}`; 
+
+        itemsList.forEach(i => {
+          text += `${twiceBoldOn}${i.qty}x ${i.name}\\n   @ R${i.price} each = R${i.qty * i.price}\\n${resetSize}`;
         });
-        
+
         text += `${boldOn}--------------------------------\\n${resetSize}${bigBoldOn}TOTAL: R${totalVal}\\n${resetSize}${boldOn}================================\\n  Thank You For Eating At Chow Down \\nPlease collect your order at the trailer.\\n================================\\n\\n\\n${resetSize}`;
-        
+
         const rawUrl = "rawbt:data:text/plain;base64," + btoa(text);
-        
+
         window.location.href = rawUrl;
-        
+
         setTimeout(() => {
           window.location.href = rawUrl;
         }, 5000);
@@ -406,7 +406,7 @@ HTML_CONTENT = """<!DOCTYPE html>
           const target = orders.find(o => o.num === orderNum);
           if (!target) return;
           if (newStatus === 'collected' && !window.confirm(`Clear Order #${orderNum}?`)) return;
-          
+
           const isMarkingComplete = (newStatus === 'complete' && target.status !== 'complete');
           const updated = { ...target, status: newStatus };
           if (updatedItems) updated.items = updatedItems;
@@ -545,7 +545,7 @@ HTML_CONTENT = """<!DOCTYPE html>
       const sendBulkSms = async () => {
         if (selectedPhones.size === 0) return alert("Select at least one number.");
         if (!bulkSmsMessage.trim()) return alert("Enter an SMS message.");
-        
+
         if (!window.confirm(`Send SMS to ${selectedPhones.size} contacts?`)) return;
 
         try {
@@ -570,7 +570,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 
       const activeKitchenOrders = useMemo(() => orders.filter(o => o.status !== 'collected').sort((a, b) => a.num - b.num), [orders]);
       const activeSalesOrders = useMemo(() => orders.filter(o => o.status === 'complete' || o.status === 'collected'), [orders]);
-      
+
       const totalRandSales = useMemo(() => activeSalesOrders.reduce((sum, o) => sum + o.total, 0), [activeSalesOrders]);
       const salesItemBreakdown = useMemo(() => {
         const counts = {};
@@ -582,7 +582,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         });
         return counts;
       }, [activeSalesOrders]);
-      
+
       const sortedSalesItems = useMemo(() => {
         return Object.entries(salesItemBreakdown).sort((a,b) => b[1] - a[1]);
       }, [salesItemBreakdown]);
@@ -596,20 +596,20 @@ HTML_CONTENT = """<!DOCTYPE html>
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
             React.createElement('h2', { style: { color: '#facc15', margin: 0 } }, 'CHOW DOWN'),
             React.createElement('span', { style: { background: '#27272a', padding: '2px 8px', borderRadius: 6, fontSize: 12, color: '#a1a1aa' } }, 'v8.57'),
-            React.createElement('button', { 
+            React.createElement('button', {
               className: 'btn',
               onClick: handleReconnect,
               title: "Click to Reconnect / Reset Connection",
-              style: { 
-                background: isOnline ? '#064e3b' : '#7f1d1d', 
-                color: isOnline ? '#6ee7b7' : '#fca5a5', 
+              style: {
+                background: isOnline ? '#064e3b' : '#7f1d1d',
+                color: isOnline ? '#6ee7b7' : '#fca5a5',
                 border: '1px solid ' + (isOnline ? '#10b981' : '#ef4444'),
-                padding: '10px 16px', 
-                borderRadius: 10, 
-                fontSize: 14, 
-                fontWeight: '700', 
-                cursor: 'pointer' 
-              } 
+                padding: '10px 16px',
+                borderRadius: 10,
+                fontSize: 14,
+                fontWeight: '700',
+                cursor: 'pointer'
+              }
             }, isOnline ? '🟢 ONLINE' : '🔴 OFFLINE')
           ),
           React.createElement('div', { style: { display: 'flex', gap: 6 } },
@@ -836,7 +836,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(DISPLAY_HTML.encode('utf-8'))
             return
-            
+
         if path in ['/', '/app', '/order', '/kitchen', '/stock', '/setup', '/app.html']:
             self.send_response(200)
             self.send_header('Content-Type', 'text/html; charset=utf-8')
@@ -877,12 +877,12 @@ class Handler(BaseHTTPRequestHandler):
                     history = []
             self.wfile.write(json.dumps(history).encode())
             return
-            
+
         api = {
-            '/api/orders': orders, 
-            '/api/stock': stock, 
-            '/api/menu': menu, 
-            '/api/categories': categories, 
+            '/api/orders': orders,
+            '/api/stock': stock,
+            '/api/menu': menu,
+            '/api/categories': categories,
             '/api/counter': {"counter": counter}
         }
         if path in api:
@@ -890,10 +890,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Content-Type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
-            with lock: 
+            with lock:
                 self.wfile.write(json.dumps(api[path]).encode())
             return
-            
+
         self.send_response(404)
         self.end_headers()
 
@@ -925,7 +925,7 @@ class Handler(BaseHTTPRequestHandler):
                         counter += 1
                         save(F_CNT, {"counter": counter})
                         data['status'] = 'new'
-                        
+
                         items = data.get('items', [])
                         for item in items:
                             item_id = item.get('id')
@@ -952,27 +952,27 @@ class Handler(BaseHTTPRequestHandler):
                         sms_msg = f"Hi! Your Chow Down order #{order_num} is READY for collection. Please pick it up at the trailer. Thank you!"
                         send_sms(data.get('phone', ''), sms_msg)
                         data.pop('trigger_sms', None)
-                    
+
                     target_num = data.get('num')
                     new_orders = [o for o in orders if o.get('num') != target_num]
                     orders = new_orders
-                    
+
                     orders.append(data)
                     save(F_ORD, orders)
-                    
+
                     self.send_response(200)
                     self.send_header('Content-Type', 'application/json')
                     self.send_header('Access-Control-Allow-Origin', '*')
                     self.end_headers()
                     self.wfile.write(json.dumps({"ok": True, "num": data['num']}).encode())
                     return
-                elif p == '/api/stock': 
+                elif p == '/api/stock':
                     stock = data
                     save(F_STK, stock)
-                elif p == '/api/menu': 
+                elif p == '/api/menu':
                     menu = data
                     save(F_MEN, menu)
-                elif p == '/api/categories': 
+                elif p == '/api/categories':
                     categories = data
                     save(F_CAT, categories)
                 elif p == '/api/bulk-sms':
@@ -982,14 +982,14 @@ class Handler(BaseHTTPRequestHandler):
                     for num in numbers:
                         send_sms(num, msg)
                         sent_count += 1
-                        
+
                     self.send_response(200)
                     self.send_header('Content-Type', 'application/json')
                     self.send_header('Access-Control-Allow-Origin', '*')
                     self.end_headers()
                     self.wfile.write(json.dumps({"ok": True, "sent_count": sent_count}).encode())
                     return
-                    
+
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
@@ -1009,16 +1009,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, *a): pass
 
-if __name__ == '__main__':
+def run_server():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(2)
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
         s.close()
-    except: 
+    except:
         ip = "192.168.8.199"
     print(f"=== CHOW DOWN SERVER v8.57 ===")
     print(f"Server running at: http://{ip}:{PORT}/")
     print(f"Dedicated Display link: http://{ip}:{PORT}/display")
     ThreadingHTTPServer(('0.0.0.0', PORT), Handler).serve_forever()
+
+def start_server():
+    run_server()
+
+if __name__ == '__main__':
+    run_server()
