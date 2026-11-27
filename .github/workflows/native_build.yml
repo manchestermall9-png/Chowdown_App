@@ -1,3 +1,43 @@
+name: Native Android Build
+
+on:
+  push:
+    branches: [ main, master, Commercial2, Commercial4 ]
+  workflow_dispatch:
+
+env:
+  LICENSE_PEPPER: ${{ secrets.LICENSE_PEPPER }}
+  KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+  KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+  KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+  KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+  RELEASE_KEYSTORE_PATH: app/release.jks
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+          accept-android-sdk-licenses: true
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.5'
+
 - name: Generate Project Structure & Copy v9.11.12 Files
         run: |
           mkdir -p app/src/main/java/org/chowdown/pos
