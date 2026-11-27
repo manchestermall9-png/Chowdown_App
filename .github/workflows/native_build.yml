@@ -38,7 +38,7 @@ jobs:
         with:
           gradle-version: '8.5'
 
-- name: Generate Project Structure & Copy v9.11.12 Files
+      - name: Generate Project Structure & Copy v9.11.12 Files
         run: |
           mkdir -p app/src/main/java/org/chowdown/pos
           mkdir -p app/src/main/python
