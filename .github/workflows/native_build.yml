@@ -107,23 +107,22 @@ jobs:
                 pass
 
         def load_sms_config():
-            cfg = {"sms_enabled": False, "winsms_key": ""}
-            loaded = load_json_safe(F_SMS, {})
-            if isinstance(loaded, dict):
-                cfg["sms_enabled"] = bool(loaded.get("sms_enabled", False))
-                cfg["winsms_key"] = str(loaded.get("winsms_key", "") or "").strip()
-            if not cfg["winsms_key"]:
-                cfg["sms_enabled"] = False
-            return cfg
+    cfg = {"sms_enabled": False, "winsms_key": ""}
+    loaded = load_json_safe(F_SMS, {})
+    if isinstance(loaded, dict):
+        cfg["sms_enabled"] = bool(loaded.get("sms_enabled", False))
+        cfg["winsms_key"] = str(loaded.get("winsms_key", "") or "").strip()
+    return cfg
 
-        def save_sms_config(sms_enabled, winsms_key):
-            clean_key = str(winsms_key or "").strip()
-            cfg = {
-                "sms_enabled": bool(sms_enabled) and bool(clean_key),
-                "winsms_key": clean_key
-            }
-            save(F_SMS, cfg)
-            return cfg
+
+def save_sms_config(sms_enabled, winsms_key):
+    clean_key = str(winsms_key or "").strip()
+    cfg = {
+        "sms_enabled": bool(sms_enabled),
+        "winsms_key": clean_key,
+    }
+    save(F_SMS, cfg)
+    return cfg
 
         def load_store_config():
             cfg = {"store_name": "MY STORE"}
@@ -639,29 +638,28 @@ jobs:
                 }
               };
 
-              const handleSaveSmsConfig = async (e) => {
-                e.preventDefault();
-                const trimmedKey = (winsmsKeyInput || "").trim();
-                if (smsEnabled && !trimmedKey) {
-                  return alert("Please enter your WinSMS API key to activate custom SMS.");
-                }
-                try {
-                  const res = await fetch('/api/sms_config', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ sms_enabled: smsEnabled, winsms_key: trimmedKey })
-                  });
-                  if (res.ok) {
-                    const data = await res.json();
-                    setSmsEnabled(!!data.sms_enabled);
-                    setWinsmsKeyInput(data.winsms_key || "");
-                    alert(data.sms_enabled ? "Custom SMS activated and API key saved!" : "Custom SMS settings saved (disabled).");
-                  }
-                } catch(err) {
-                  alert("Failed to save SMS settings.");
-                }
-              };
-
+               const handleSaveSmsConfig = async (e) => {
+  e.preventDefault();
+  const trimmedKey = (winsmsKeyInput || "").trim();
+  if (smsEnabled && !trimmedKey) {
+    return alert("Please enter your WinSMS API key to activate custom SMS.");
+  }
+  try {
+    const res = await fetch('/api/sms_config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sms_enabled: smsEnabled, winsms_key: trimmedKey })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setSmsEnabled(!!data.sms_enabled);
+      setWinsmsKeyInput(data.winsms_key || "");
+      alert(data.sms_enabled ? "Custom SMS activated and API key saved!" : "Custom SMS settings saved.");
+    }
+  } catch (err) {
+    alert("Failed to save SMS settings.");
+  }
+};
               const handleAddMenuItem = async (e) => {
                 e.preventDefault();
                 if (!newItemName || !newItemPrice) return alert("Enter item name and price");
@@ -947,13 +945,12 @@ jobs:
                           'Activate Custom SMS (Customer WinSMS Account)'
                         ),
                         React.createElement('input', {
-                          type: 'text',
-                          placeholder: 'Enter customer WinSMS API Key',
-                          value: winsmsKeyInput,
-                          disabled: !smsEnabled,
-                          onChange: e => setWinsmsKeyInput(e.target.value),
-                          style: { opacity: smsEnabled ? 1 : 0.5 }
-                        }),
+  type: 'text',
+  placeholder: 'Enter customer WinSMS API Key',
+  value: winsmsKeyInput,
+  onChange: e => setWinsmsKeyInput(e.target.value),
+  style: { opacity: 1 }
+}),
                         React.createElement('button', { className: 'btn btn-blue', type: 'submit', style: { width: '100%' } }, 'Save SMS Settings')
                       )
                     ),
