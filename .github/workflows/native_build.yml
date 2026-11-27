@@ -154,6 +154,29 @@ jobs:
               pass
 
           lock = threading.Lock()
+          _server_guard_lock = threading.Lock()
+          _server_started = False
+          _server_ip = "192.168.8.199"
+
+          def detect_local_ip():
+              ip = "192.168.8.199"
+              try:
+                  s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                  s.settimeout(2)
+                  s.connect(("8.8.8.8", 80))
+                  candidate = s.getsockname()[0]
+                  s.close()
+                  if candidate and not candidate.startswith("127."):
+                      ip = candidate
+              except Exception:
+                  pass
+              try:
+                  hostname_ip = socket.gethostbyname(socket.gethostname())
+                  if ip == "192.168.8.199" and hostname_ip and not hostname_ip.startswith("127."):
+                      ip = hostname_ip
+              except Exception:
+                  pass
+              return ip
 
           def archive_daily_sales():
               try:
@@ -385,6 +408,8 @@ jobs:
                 const [isServerTab, setIsServerTab] = useState(false);
                 const [device, setDevice] = useState("PHONE");
                 const [appVersion, setAppVersion] = useState("v9.11.12");
+                const [serverIp, setServerIp] = useState("");
+                const [serverPort, setServerPort] = useState("8080");
                 const [menu, setMenu] = useState([]);
                 const [categories, setCategories] = useState(["CHICKEN", "SIDES", "DOGS", "DRINKS"]);
                 const [stock, setStock] = useState({});
@@ -433,6 +458,13 @@ jobs:
                       if (vRes.ok) {
                         const vData = await vRes.json();
                         if (vData && vData.version) setAppVersion(vData.version);
+                      }
+
+                      const infoRes = await fetch('/api/server_info');
+                      if (infoRes.ok) {
+                        const infoData = await infoRes.json();
+                        if (infoData && infoData.ip) setServerIp(infoData.ip);
+                        if (infoData && infoData.port) setServerPort(String(infoData.port));
                       }
 
                       const res = await fetch('/api/orders');
@@ -486,8 +518,11 @@ jobs:
                   }
                 }, [role, storeName]);
 
+                const displayedHostIp = serverIp || ((window.location.hostname && window.location.hostname !== "127.0.0.1" && window.location.hostname !== "localhost") ? window.location.hostname : "192.168.8.199");
+                const displayedServerUrl = `http://${displayedHostIp}:${serverPort || "8080"}`;
+
                 const handleReconnect = () => {
-                  const lastOrigin = localStorage.getItem("pos_last_origin") || window.location.origin;
+                  const lastOrigin = localStorage.getItem("pos_last_origin") || displayedServerUrl || window.location.origin;
                   const targetUrl = prompt("Confirm or enter Tab-8 Server URL to reconnect (e.g. http://192.168.8.199:8080):", lastOrigin);
                   if (targetUrl) {
                     window.location.href = targetUrl.trim();
@@ -708,7 +743,7 @@ jobs:
                   if (categories.includes(formatted)) return alert("Category already exists");
                   const newCats = [...categories, formatted];
                   try {
-                    await fetch('/api/categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newCats) });
+                    await fetch('/api/categories', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(newCats) });
                     setCategories(newCats); setNewCategoryName("");
                     alert("Category added!");
                   } catch(e) { alert("Failed to add category."); }
@@ -843,7 +878,7 @@ jobs:
 
                 return React.createElement('div', null,
                   React.createElement('div', { className: 'header' },
-                    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
+                    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
                       React.createElement('h2', { style: { color: '#facc15', margin: 0 } }, storeName.toUpperCase()),
                       React.createElement('span', { style: { background: '#27272a', padding: '2px 8px', borderRadius: 6, fontSize: 12, color: '#a1a1aa' } }, appVersion),
                       React.createElement('button', {
@@ -860,7 +895,18 @@ jobs:
                           fontWeight: '700',
                           cursor: 'pointer'
                         }
-                      }, isOnline ? '🟢 ONLINE' : '🔴 OFFLINE')
+                      }, isOnline ? '🟢 ONLINE' : '🔴 OFFLINE'),
+                      React.createElement('span', {
+                        style: {
+                          background: '#27272a',
+                          color: '#facc15',
+                          border: '1px solid #3f3f46',
+                          padding: '8px 12px',
+                          borderRadius: 10,
+                          fontSize: 13,
+                          fontWeight: '700'
+                        }
+                      }, 'IP: ' + displayedHostIp + ':' + (serverPort || '8080'))
                     ),
                     React.createElement('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
                       React.createElement('button', { className: 'btn ' + (role === 'ORDER' ? 'btn-yellow' : 'btn-zinc'), onClick: () => setRole('ORDER') }, 'ORDER'),
@@ -1001,17 +1047,24 @@ jobs:
                           React.createElement('h4', { style: { color: '#10b981', margin: '0 0 10px 0' } }, '🏆 Best Sellers'),
                           sortedSalesItems.map(([name, qty], idx) => React.createElement('div', { key: idx, style: { display: 'flex', justifyContent: 'space-between', padding: '6px 0' } },
                             React.createElement('span', { style: { fontWeight: 'bold' } }, name),
-                            React.createElement('span', { style: { fontWeight: 'bold' } }, qty, ' sold')
+                            React.createElement('span', { style: { backgroundColor: '#064e3b', color: '#6ee7b7', padding: '6px 12px', borderRadius: 8, fontSize: 14, fontWeight: 'bold' } }, qty, ' sold')
                           ))
                         ),
-                        React.createElement('div', { className: 'card', style: { borderColor: '#3f3f46' } },
-                          React.createElement('h4', { style: { color: '#facc15', margin: '0 0 10px 0' } }, '📋 Session Item Breakdown'),
-                          sortedSalesItems.length === 0 ? React.createElement('div', { style: { color: '#a1a1aa' } }, 'No items sold in current session yet.') :
-                          sortedSalesItems.map(([name, qty], idx) => React.createElement('div', { key: idx, style: { display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #27272a' } },
-                            React.createElement('span', null, name),
-                            React.createElement('span', { style: { fontWeight: 'bold' } }, qty, ' sold')
+                        sortedSalesItems.length > 0 && React.createElement('div', { className: 'card', style: { borderColor: '#ef4444' } },
+                          React.createElement('h4', { style: { color: '#ef4444', margin: '0 0 10px 0' } }, '📉 Least Sellers'),
+                          [...sortedSalesItems].reverse().map(([name, qty], idx) => React.createElement('div', { key: idx, style: { display: 'flex', justifyContent: 'space-between', padding: '6px 0' } },
+                            React.createElement('span', { style: { fontWeight: 'bold' } }, name),
+                            React.createElement('span', { style: { backgroundColor: '#7f1d1d', color: '#fca5a5', padding: '6px 12px', borderRadius: 8, fontSize: 14, fontWeight: 'bold' } }, qty, ' sold')
                           ))
                         )
+                      ),
+                      React.createElement('div', { className: 'card', style: { borderColor: '#3f3f46' } },
+                        React.createElement('h4', { style: { color: '#facc15', margin: '0 0 10px 0' } }, '📋 Session Item Breakdown'),
+                        sortedSalesItems.length === 0 ? React.createElement('div', { style: { color: '#a1a1aa' } }, 'No items sold in current session yet.') :
+                        sortedSalesItems.map(([name, qty], idx) => React.createElement('div', { key: idx, style: { display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #27272a' } },
+                          React.createElement('span', null, name),
+                          React.createElement('span', { style: { fontWeight: 'bold' } }, qty, ' sold')
+                        ))
                       ),
                       React.createElement('div', { className: 'card', style: { marginTop: 20 } },
                         React.createElement('h4', { style: { color: '#facc15', margin: '0 0 10px 0' } }, '📁 Archived Daily Sales History'),
@@ -1147,6 +1200,15 @@ jobs:
                       self.send_header('Access-Control-Allow-Origin', '*')
                       self.end_headers()
                       self.wfile.write(json.dumps({"version": APP_VERSION}).encode())
+                      return
+
+                  if path == '/api/server_info':
+                      self.send_response(200)
+                      self.send_header('Content-Type', 'application/json')
+                      self.send_header('Access-Control-Allow-Origin', '*')
+                      self.end_headers()
+                      current_ip = _server_ip or detect_local_ip()
+                      self.wfile.write(json.dumps({"ip": current_ip, "port": PORT, "url": f"http://{current_ip}:{PORT}"}).encode())
                       return
 
                   if path == '/api/store_config':
@@ -1348,15 +1410,22 @@ jobs:
               def log_message(self, *a): pass
 
           def start_server():
-              try:
-                  s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                  s.settimeout(2)
-                  s.connect(("8.8.8.8", 80))
-                  ip = s.getsockname()[0]
-                  s.close()
-              except Exception:
-                  ip = "192.168.8.199"
-              ThreadingHTTPServer(('0.0.0.0', PORT), Handler).serve_forever()
+              global _server_started, _server_ip
+              with _server_guard_lock:
+                  if _server_started:
+                      return
+                  _server_started = True
+                  _server_ip = detect_local_ip()
+
+              def _run():
+                  try:
+                      server = ThreadingHTTPServer(('0.0.0.0', PORT), Handler)
+                      server.serve_forever()
+                  except Exception:
+                      pass
+
+              t = threading.Thread(target=_run, daemon=True)
+              t.start()
 
           if __name__ in ("__main__", "pos_server"):
               start_server()
