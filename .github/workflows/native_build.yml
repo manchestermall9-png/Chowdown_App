@@ -1,12 +1,11 @@
-name: Native Android Build
+name: Native Android Play Bundle Build
 
 on:
   push:
-    branches: [ main, master, Commercial4, Commercial5, Commercial6 ]
+    branches: [ Commercial7 ]
   workflow_dispatch:
 
 env:
-  LICENSE_PEPPER: "${{ secrets.LICENSE_PEPPER }}"
   KEYSTORE_BASE64: "${{ secrets.KEYSTORE_BASE64 }}"
   KEYSTORE_PASSWORD: "${{ secrets.KEYSTORE_PASSWORD }}"
   KEY_ALIAS: "${{ secrets.KEY_ALIAS }}"
@@ -30,7 +29,7 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+          packages: 'platform-tools platforms;android-36 build-tools;35.0.0'
           accept-android-sdk-licenses: true
 
       - name: Set up Gradle
@@ -38,10 +37,10 @@ jobs:
         with:
           gradle-version: '8.5'
 
-      - name: Generate Project Structure & Copy v9.11.13 Files
+      - name: Generate Project Structure & Copy v9.12.0 Files
         run: |
           rm -f app/src/main/AndroidManifest.xml
-          mkdir -p app/src/main/java/org/chowdown/pos
+          mkdir -p app/src/main/java/org/foodorder/pos
           mkdir -p app/src/main/python
           mkdir -p app/src/main/res/values
           mkdir -p app/src/main/assets
@@ -53,32 +52,24 @@ jobs:
           cat << 'PYEOF' > app/src/main/python/pos_server.py
           #!/usr/bin/env python3
           # =========================================================
-          # POS / KITCHEN SYSTEM - VERSION v9.11.13 (Commercial6)
+          # FOOD ORDER APP - POS / KITCHEN SYSTEM v9.12.0 (Commercial7)
           # =========================================================
 
           import json, os, threading, socket, urllib.request, datetime
           from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
           from urllib.parse import urlparse
 
-          APP_VERSION = os.environ.get("POS_APP_VERSION") or "v9.11.13"
+          APP_VERSION = os.environ.get("POS_APP_VERSION") or "v9.12.0"
           PORT = 8080
-          DIR = os.environ.get("POS_DATA_DIR") or os.path.dirname(os.path.abspath(__file__)) or "/storage/emulated/0/ChowDown_Test"
+          DIR = os.environ.get("POS_DATA_DIR") or os.path.dirname(os.path.abspath(__file__)) or "/storage/emulated/0/FoodOrderApp_Data"
           os.makedirs(DIR, exist_ok=True)
           try:
               os.chdir(DIR)
           except Exception:
               pass
 
-          def _parse_days_left():
-              raw = (os.environ.get("POS_LICENSE_DAYS_LEFT") or "").strip()
-              try:
-                  return int(raw)
-              except Exception:
-                  return -1
-
-          LICENSE_DAYS_LEFT = _parse_days_left()
-          LICENSE_EXPIRY = (os.environ.get("POS_LICENSE_EXPIRY") or "").strip()
-          LICENSE_WHITELISTED = (os.environ.get("POS_LICENSE_WHITELISTED") or "0").strip() == "1"
+          SUB_ACTIVE = (os.environ.get("POS_SUB_ACTIVE") or "0").strip() == "1"
+          SUB_PLAN_LABEL = (os.environ.get("POS_SUB_PLAN") or "").strip()
 
           F_ORD = os.path.join(DIR, "orders.json")
           F_STK = os.path.join(DIR, "stock.json")
@@ -137,7 +128,7 @@ jobs:
               return cfg
 
           def load_store_config():
-              cfg = {"store_name": "MY STORE"}
+              cfg = {"store_name": "FOOD ORDER APP"}
               loaded = load_json_safe(F_STORE, {})
               if isinstance(loaded, dict):
                   name = str(loaded.get("store_name", "") or "").strip()
@@ -146,7 +137,7 @@ jobs:
               return cfg
 
           def save_store_config(store_name):
-              clean_name = str(store_name or "").strip() or "MY STORE"
+              clean_name = str(store_name or "").strip() or "FOOD ORDER APP"
               cfg = {"store_name": clean_name}
               save(F_STORE, cfg)
               return cfg
@@ -361,7 +352,7 @@ jobs:
           <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Live Status Board</title>
+            <title>Food Order App — Live Status Board</title>
             <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
             <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
             <style>
@@ -388,7 +379,7 @@ jobs:
               const { createRoot } = ReactDOM;
               function DisplayApp() {
                 const [orders, setOrders] = useState([]);
-                const [storeName, setStoreName] = useState("MY STORE");
+                const [storeName, setStoreName] = useState("FOOD ORDER APP");
                 useEffect(() => {
                   const fetchOrders = async () => {
                     try {
@@ -448,7 +439,7 @@ jobs:
           <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Trailer OS v9.11.13</title>
+            <title>Food Order App v9.12.0</title>
             <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
             <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
             <style>
@@ -483,14 +474,14 @@ jobs:
           <body>
             <div id="root"></div>
             <script>
-              const { useState, useEffect, useMemo, useRef } = React;
+              const { useState, useEffect, useMemo } = React;
               const { createRoot } = ReactDOM;
 
               function App() {
                 const [role, setRole] = useState("ORDER");
                 const [isServerTab, setIsServerTab] = useState(false);
                 const [device, setDevice] = useState("PHONE");
-                const [appVersion, setAppVersion] = useState("v9.11.13");
+                const [appVersion, setAppVersion] = useState("v9.12.0");
                 const [serverIp, setServerIp] = useState("");
                 const [serverPort, setServerPort] = useState("8080");
                 const [menu, setMenu] = useState([]);
@@ -505,14 +496,10 @@ jobs:
                 const [lastOrderNum, setLastOrderNum] = useState(null);
                 const [isOnline, setIsOnline] = useState(true);
                 const [kitchenStatusMsg, setKitchenStatusMsg] = useState("");
+                const [subPlanLabel, setSubPlanLabel] = useState("");
 
-                const [licenseDaysLeft, setLicenseDaysLeft] = useState(null);
-                const [licenseWhitelisted, setLicenseWhitelisted] = useState(false);
-                const [showExpiryModal, setShowExpiryModal] = useState(false);
-                const expiryModalShownRef = useRef(false);
-
-                const [storeName, setStoreName] = useState("MY STORE");
-                const [storeNameInput, setStoreNameInput] = useState("MY STORE");
+                const [storeName, setStoreName] = useState("FOOD ORDER APP");
+                const [storeNameInput, setStoreNameInput] = useState("FOOD ORDER APP");
                 const [smsEnabled, setSmsEnabled] = useState(false);
                 const [winsmsKeyInput, setWinsmsKeyInput] = useState("");
 
@@ -578,20 +565,10 @@ jobs:
                         if (vData && vData.version) setAppVersion(vData.version);
                       }
 
-                      const licRes = await fetch('/api/license_status');
-                      if (licRes.ok) {
-                        const licData = await licRes.json();
-                        if (typeof licData.days_left === 'number' && licData.days_left >= 0) {
-                          setLicenseDaysLeft(licData.days_left);
-                          setLicenseWhitelisted(!!licData.whitelisted);
-                          if (!licData.whitelisted && licData.days_left <= 7 && !expiryModalShownRef.current) {
-                            expiryModalShownRef.current = true;
-                            setShowExpiryModal(true);
-                          }
-                        } else {
-                          setLicenseDaysLeft(null);
-                          setLicenseWhitelisted(!!licData.whitelisted);
-                        }
+                      const subRes = await fetch('/api/subscription_status');
+                      if (subRes.ok) {
+                        const subData = await subRes.json();
+                        setSubPlanLabel(subData.plan || "");
                       }
 
                       const infoRes = await fetch('/api/server_info');
@@ -657,7 +634,7 @@ jobs:
 
                 const handleReconnect = () => {
                   const lastOrigin = localStorage.getItem("pos_last_origin") || displayedServerUrl || window.location.origin;
-                  const targetUrl = prompt("Confirm or enter Tab-8 Server URL to reconnect (e.g. http://192.168.8.199:8080):", lastOrigin);
+                  const targetUrl = prompt("Confirm or enter Server URL to reconnect (e.g. http://192.168.8.199:8080):", lastOrigin);
                   if (targetUrl) {
                     window.location.href = targetUrl.trim();
                   }
@@ -677,7 +654,7 @@ jobs:
                   const now = new Date();
                   const dateStr = now.toLocaleDateString([], { year: 'numeric', month: '2-digit', day: '2-digit' });
                   const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                  const headerName = (storeName || "MY STORE").toUpperCase();
+                  const headerName = (storeName || "FOOD ORDER APP").toUpperCase();
 
                   const ESC = '\\x1b';
                   const bigBoldOn = ESC + '!' + '\\x38';
@@ -735,7 +712,7 @@ jobs:
                     }
                   } catch(e) {
                     setIsOnline(false);
-                    alert('⚠️ Network Offline! Order failed to sync with Tab-8 server. Please check Wi-Fi connection.');
+                    alert('⚠️ Network Offline! Order failed to sync with server. Please check Wi-Fi connection.');
                   }
                 };
 
@@ -794,7 +771,7 @@ jobs:
 
                 const handleSaveStoreConfig = async (e) => {
                   e.preventDefault();
-                  const cleaned = (storeNameInput || "").trim() || "MY STORE";
+                  const cleaned = (storeNameInput || "").trim() || "FOOD ORDER APP";
                   try {
                     const res = await fetch('/api/store_config', {
                       method: 'POST',
@@ -1046,35 +1023,11 @@ jobs:
                 };
 
                 return React.createElement('div', null,
-                  showExpiryModal && licenseDaysLeft !== null && React.createElement('div', {
-                    style: {
-                      position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-                      background: 'rgba(0,0,0,0.75)', zIndex: 9999,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16
-                    }
-                  }, React.createElement('div', {
-                    className: 'card',
-                    style: { maxWidth: 420, width: '100%', border: '2px solid #facc15', textAlign: 'center', marginBottom: 0 }
-                  },
-                    React.createElement('h3', { style: { color: '#facc15', marginTop: 0 } }, '🔒 License Expiry Reminder'),
-                    React.createElement('p', { style: { fontSize: 16, margin: '10px 0' } },
-                      licenseDaysLeft === 0
-                        ? 'Your app license expires today (0 days remaining).'
-                        : 'Your app will expire in ' + licenseDaysLeft + (licenseDaysLeft === 1 ? ' day.' : ' days.')
-                    ),
-                    React.createElement('p', { style: { fontSize: 14, color: '#e4e4e7', marginBottom: 18 } },
-                      'Please contact willowton7@gmail.com for renewal license.'
-                    ),
-                    React.createElement('button', {
-                      className: 'btn btn-yellow',
-                      style: { width: '100%' },
-                      onClick: () => setShowExpiryModal(false)
-                    }, 'OK')
-                  )),
                   React.createElement('div', { className: 'header' },
                     React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
                       React.createElement('h2', { style: { color: '#facc15', margin: 0 } }, storeName.toUpperCase()),
                       React.createElement('span', { style: { background: '#27272a', padding: '2px 8px', borderRadius: 6, fontSize: 12, color: '#a1a1aa' } }, appVersion),
+                      subPlanLabel && React.createElement('span', { style: { background: '#064e3b', color: '#6ee7b7', padding: '2px 8px', borderRadius: 6, fontSize: 12, fontWeight: '700' } }, subPlanLabel),
                       React.createElement('button', {
                         className: 'btn',
                         onClick: handleReconnect,
@@ -1100,18 +1053,7 @@ jobs:
                           fontSize: 13,
                           fontWeight: '700'
                         }
-                      }, 'IP: ' + displayedHostIp + ':' + (serverPort || '8080')),
-                      !licenseWhitelisted && licenseDaysLeft !== null && React.createElement('span', {
-                        style: {
-                          background: licenseDaysLeft <= 7 ? '#451a03' : '#1f2937',
-                          color: licenseDaysLeft <= 7 ? '#fbbf24' : '#e5e7eb',
-                          border: '1px solid ' + (licenseDaysLeft <= 7 ? '#f59e0b' : '#4b5563'),
-                          padding: '6px 10px',
-                          borderRadius: 8,
-                          fontSize: 12,
-                          fontWeight: '700'
-                        }
-                      }, '🔒 EXPIRY: ' + licenseDaysLeft + 'd')
+                      }, 'IP: ' + displayedHostIp + ':' + (serverPort || '8080'))
                     ),
                     React.createElement('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
                       React.createElement('button', { className: 'btn ' + (role === 'ORDER' ? 'btn-yellow' : 'btn-zinc'), onClick: () => setRole('ORDER') }, 'ORDER'),
@@ -1126,8 +1068,8 @@ jobs:
                   React.createElement('div', { className: 'container' },
                     role === 'ORDER' ? React.createElement('div', null,
                       !isOnline && React.createElement('div', { className: 'card', style: { background: '#7f1d1d', border: '2px solid #ef4444', textAlign: 'center', marginBottom: 15 } },
-                        React.createElement('div', { style: { fontWeight: 'bold', fontSize: 16, color: '#fca5a5', marginBottom: 6 } }, '⚠️ WARNING: OFFLINE FROM TAB-8 SERVER'),
-                        React.createElement('div', { style: { fontSize: 13, marginBottom: 10 } }, 'Your phone has lost connection to the tablet server. Order numbers may get out of sync if you continue taking orders.'),
+                        React.createElement('div', { style: { fontWeight: 'bold', fontSize: 16, color: '#fca5a5', marginBottom: 6 } }, '⚠️ WARNING: OFFLINE FROM SERVER'),
+                        React.createElement('div', { style: { fontSize: 13, marginBottom: 10 } }, 'Your device has lost connection to the server. Order numbers may get out of sync if you continue taking orders.'),
                         React.createElement('button', { className: 'btn btn-yellow', onClick: handleReconnect }, '🔄 Reconnect to Last Active Connection')
                       ),
                       kitchenStatusMsg && React.createElement('div', { className: 'card', style: { background: '#064e3b', border: '2px solid #10b981', color: '#ecfdf5', fontWeight: 'bold', textAlign: 'center', marginBottom: 15 } },
@@ -1445,18 +1387,12 @@ jobs:
                       self.wfile.write(json.dumps({"version": APP_VERSION}).encode())
                       return
 
-                  if path == '/api/license_status':
+                  if path == '/api/subscription_status':
                       self.send_response(200)
                       self.send_header('Content-Type', 'application/json')
                       self.send_header('Access-Control-Allow-Origin', '*')
                       self.end_headers()
-                      payload = {
-                          "days_left": LICENSE_DAYS_LEFT,
-                          "expiry": LICENSE_EXPIRY,
-                          "whitelisted": LICENSE_WHITELISTED,
-                          "warning": (not LICENSE_WHITELISTED) and (0 <= LICENSE_DAYS_LEFT <= 7)
-                      }
-                      self.wfile.write(json.dumps(payload).encode())
+                      self.wfile.write(json.dumps({"active": SUB_ACTIVE, "plan": SUB_PLAN_LABEL}).encode())
                       return
 
                   if path == '/api/server_info':
@@ -1630,7 +1566,7 @@ jobs:
                               sms_sent = False
                               if data.get('trigger_sms'):
                                   order_num = data.get('num')
-                                  st_name = load_store_config().get("store_name", "MY STORE")
+                                  st_name = load_store_config().get("store_name", "FOOD ORDER APP")
                                   sms_msg = (
                                       f"Hi, your order #{order_num} is ready for collection at {st_name}. "
                                       f"Future specials/promos via SMS? Reply YES or NO."
@@ -1664,7 +1600,7 @@ jobs:
                           elif p == '/api/bulk-sms':
                               numbers = data.get('numbers', [])
                               raw_msg = str(data.get('message', '') or '').strip()
-                              st_name = load_store_config().get("store_name", "MY STORE")
+                              st_name = load_store_config().get("store_name", "FOOD ORDER APP")
                               opt_out_line = f"{st_name}: Reply STOP to opt out of promos."
                               msg = raw_msg if "opt out" in raw_msg.lower() or "stop" in raw_msg.lower() else f"{raw_msg}\n{opt_out_line}"
                               consents = load_consents_map()
@@ -1748,7 +1684,7 @@ jobs:
                   maven { url 'https://chaquo.com/maven' }
               }
           }
-          rootProject.name = "VendorPOS"
+          rootProject.name = "FoodOrderApp"
           include ':app'
           EOF
 
@@ -1761,7 +1697,7 @@ jobs:
                   maven { url 'https://chaquo.com/maven' }
               }
               dependencies {
-                  classpath 'com.android.tools.build:gradle:8.2.2'
+                  classpath 'com.android.tools.build:gradle:8.5.2'
                   classpath 'com.chaquo.python:gradle:17.2.0'
               }
           }
@@ -1780,16 +1716,15 @@ jobs:
           apply plugin: 'com.chaquo.python'
 
           android {
-              namespace 'org.chowdown.pos'
-              compileSdk 34
+              namespace 'org.foodorder.pos'
+              compileSdk 36
 
               defaultConfig {
-                  applicationId "org.chowdown.pos"
+                  applicationId "org.foodorder.pos"
                   minSdk 24
-                  targetSdk 34
-                  versionCode 91113
-                  versionName "9.11.13"
-                  buildConfigField "String", "LICENSE_PEPPER", "\"${System.getenv("LICENSE_PEPPER") ?: "DEFAULT_CHANGE_IN_GITHUB_SECRETS"}\""
+                  targetSdk 36
+                  versionCode 91200
+                  versionName "9.12.0"
 
                   ndk {
                       abiFilters "arm64-v8a", "x86_64"
@@ -1806,10 +1741,6 @@ jobs:
                           keyPassword System.getenv("KEY_PASSWORD") ?: ""
                       }
                   }
-              }
-
-              buildFeatures {
-                  buildConfig true
               }
 
               buildTypes {
@@ -1832,6 +1763,7 @@ jobs:
 
           dependencies {
               implementation 'androidx.appcompat:appcompat:1.6.1'
+              implementation 'com.android.billingclient:billing:9.1.0'
           }
           EOF
 
@@ -1843,7 +1775,7 @@ jobs:
 
               <application
                   android:allowBackup="false"
-                  android:label="POS App"
+                  android:label="Food Order App"
                   android:supportsRtl="true"
                   android:theme="@style/Theme.AppCompat.Light.NoActionBar"
                   android:usesCleartextTraffic="true">
@@ -1860,21 +1792,17 @@ jobs:
           </manifest>
           EOF
 
-          cat << 'EOF' > app/src/main/java/org/chowdown/pos/MainActivity.java
-          package org.chowdown.pos;
+          cat << 'EOF' > app/src/main/java/org/foodorder/pos/MainActivity.java
+          package org.foodorder.pos;
 
           import android.annotation.SuppressLint;
           import android.app.AlertDialog;
-          import android.content.Context;
           import android.content.Intent;
-          import android.content.SharedPreferences;
           import android.graphics.Color;
           import android.net.Uri;
           import android.os.Bundle;
           import android.os.Handler;
           import android.os.Looper;
-          import android.provider.Settings;
-          import android.text.InputType;
           import android.view.Gravity;
           import android.view.View;
           import android.webkit.JsResult;
@@ -1884,15 +1812,27 @@ jobs:
           import android.webkit.WebView;
           import android.webkit.WebViewClient;
           import android.widget.Button;
-          import android.widget.EditText;
           import android.widget.FrameLayout;
           import android.widget.LinearLayout;
           import android.widget.ProgressBar;
           import android.widget.TextView;
           import android.widget.Toast;
 
+          import androidx.annotation.NonNull;
+          import androidx.annotation.Nullable;
           import androidx.appcompat.app.AppCompatActivity;
 
+          import com.android.billingclient.api.AcknowledgePurchaseParams;
+          import com.android.billingclient.api.BillingClient;
+          import com.android.billingclient.api.BillingClientStateListener;
+          import com.android.billingclient.api.BillingFlowParams;
+          import com.android.billingclient.api.BillingResult;
+          import com.android.billingclient.api.PendingPurchasesParams;
+          import com.android.billingclient.api.ProductDetails;
+          import com.android.billingclient.api.Purchase;
+          import com.android.billingclient.api.PurchasesUpdatedListener;
+          import com.android.billingclient.api.QueryProductDetailsParams;
+          import com.android.billingclient.api.QueryPurchasesParams;
           import com.chaquo.python.PyException;
           import com.chaquo.python.PyObject;
           import com.chaquo.python.Python;
@@ -1901,24 +1841,29 @@ jobs:
           import java.io.File;
           import java.net.InetSocketAddress;
           import java.net.Socket;
-          import java.nio.charset.StandardCharsets;
-          import java.security.MessageDigest;
-          import java.text.ParseException;
-          import java.text.SimpleDateFormat;
-          import java.util.Date;
-          import java.util.Locale;
+          import java.util.ArrayList;
+          import java.util.HashMap;
+          import java.util.List;
+          import java.util.Map;
           import java.util.concurrent.ExecutorService;
           import java.util.concurrent.Executors;
 
           public class MainActivity extends AppCompatActivity {
 
-              public static final String APP_VERSION = "v9.11.13";
+              public static final String APP_VERSION = "v9.12.0";
+              public static final String SUB_MONTHLY_ID = "food_order_monthly";
+              public static final String SUB_ANNUAL_ID = "food_order_annual";
               private static final int LOCAL_PORT = 8080;
 
               private final ExecutorService pythonExecutor = Executors.newCachedThreadPool();
               private final Handler mainHandler = new Handler(Looper.getMainLooper());
               private volatile boolean pythonStarted = false;
               private volatile boolean pythonReady = false;
+              private volatile boolean hasActiveSubscription = false;
+              private volatile String activePlanLabel = "";
+
+              private BillingClient billingClient;
+              private final Map<String, ProductDetails> productDetailsMap = new HashMap<>();
 
               private FrameLayout rootLayout;
               private LinearLayout loadingOverlay;
@@ -1926,58 +1871,222 @@ jobs:
               private TextView loadingText;
               private Button retryButton;
               private WebView webView;
+              private AlertDialog subscriptionDialog;
+
+              private final PurchasesUpdatedListener purchasesUpdatedListener = (billingResult, purchases) -> {
+                  if (billingResult.getResponseCode() == BillingClient.BillingResponseCode.OK && purchases != null) {
+                      handlePurchases(purchases);
+                  } else if (billingResult.getResponseCode() == BillingClient.BillingResponseCode.USER_CANCELED) {
+                      Toast.makeText(this, "Subscription cancelled.", Toast.LENGTH_SHORT).show();
+                  } else {
+                      Toast.makeText(this, "Billing update: " + billingResult.getDebugMessage(), Toast.LENGTH_SHORT).show();
+                  }
+              };
 
               @Override
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
+                  ensurePosViewsCreated();
+                  setContentView(rootLayout);
+                  showLoadingSpinner("Checking Food Order App subscription...", false);
+                  initBillingClient();
+              }
 
-                  if (LicenseManager.isLicenseActive(this)) {
-                      startPosApp();
-                  } else {
-                      showActivationDialog();
+              @Override
+              protected void onResume() {
+                  super.onResume();
+                  if (billingClient != null && billingClient.isReady()) {
+                      queryActiveSubscriptions();
                   }
               }
 
-              private void showActivationDialog() {
-                  String deviceId = LicenseManager.getDeviceId(this);
+              private void initBillingClient() {
+                  PendingPurchasesParams pendingPurchasesParams = PendingPurchasesParams.newBuilder()
+                          .enableOneTimeProducts()
+                          .build();
 
-                  AlertDialog.Builder builder = new AlertDialog.Builder(this);
-                  builder.setTitle("App Activation Required (" + APP_VERSION + ")");
-                  builder.setCancelable(false);
+                  billingClient = BillingClient.newBuilder(this)
+                          .setListener(purchasesUpdatedListener)
+                          .enablePendingPurchases(pendingPurchasesParams)
+                          .enableAutoServiceReconnection()
+                          .build();
 
-                  LinearLayout container = new LinearLayout(this);
-                  container.setOrientation(LinearLayout.VERTICAL);
-                  int pad = (int) (18 * getResources().getDisplayMetrics().density);
-                  container.setPadding(pad, pad, pad, pad);
+                  billingClient.startConnection(new BillingClientStateListener() {
+                      @Override
+                      public void onBillingSetupFinished(@NonNull BillingResult billingResult) {
+                          if (billingResult.getResponseCode() == BillingClient.BillingResponseCode.OK) {
+                              querySubscriptionCatalog();
+                              queryActiveSubscriptions();
+                          } else {
+                              showSubscriptionPrompt("Unable to connect to Google Play Billing (" + billingResult.getDebugMessage() + ").");
+                          }
+                      }
 
-                  TextView idLabel = new TextView(this);
-                  idLabel.setText("Device ID:\n" + deviceId);
-                  idLabel.setTextIsSelectable(true);
-                  idLabel.setPadding(0, 0, 0, pad / 2);
-                  container.addView(idLabel);
-
-                  final EditText keyInput = new EditText(this);
-                  keyInput.setHint("Enter license key (YYYYMMDD-XXXXXXXXXXXX)");
-                  keyInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
-                  container.addView(keyInput);
-
-                  builder.setView(container);
-
-                  builder.setPositiveButton("Activate", (dialog, which) -> {
-                      String enteredKey = keyInput.getText().toString().trim();
-                      LicenseManager.ValidationResult result = LicenseManager.activateKey(this, enteredKey);
-                      Toast.makeText(this, result.message, Toast.LENGTH_LONG).show();
-
-                      if (result.valid) {
-                          startPosApp();
-                      } else {
-                          showActivationDialog();
+                      @Override
+                      public void onBillingServiceDisconnected() {
+                          // Handled by enableAutoServiceReconnection()
                       }
                   });
+              }
 
-                  builder.setNegativeButton("Exit", (dialog, which) -> finish());
+              private void querySubscriptionCatalog() {
+                  List<QueryProductDetailsParams.Product> productList = new ArrayList<>();
+                  productList.add(QueryProductDetailsParams.Product.newBuilder()
+                          .setProductId(SUB_MONTHLY_ID)
+                          .setProductType(BillingClient.ProductType.SUBS)
+                          .build());
+                  productList.add(QueryProductDetailsParams.Product.newBuilder()
+                          .setProductId(SUB_ANNUAL_ID)
+                          .setProductType(BillingClient.ProductType.SUBS)
+                          .build());
 
-                  builder.show();
+                  QueryProductDetailsParams params = QueryProductDetailsParams.newBuilder()
+                          .setProductList(productList)
+                          .build();
+
+                  billingClient.queryProductDetailsAsync(params, (billingResult, queryProductDetailsResult) -> {
+                      if (billingResult.getResponseCode() == BillingClient.BillingResponseCode.OK && queryProductDetailsResult != null) {
+                          synchronized (productDetailsMap) {
+                              productDetailsMap.clear();
+                              for (ProductDetails details : queryProductDetailsResult.getProductDetailsList()) {
+                                  productDetailsMap.put(details.getProductId(), details);
+                              }
+                          }
+                      }
+                  });
+              }
+
+              private void queryActiveSubscriptions() {
+                  QueryPurchasesParams params = QueryPurchasesParams.newBuilder()
+                          .setProductType(BillingClient.ProductType.SUBS)
+                          .build();
+
+                  billingClient.queryPurchasesAsync(params, (billingResult, purchases) -> {
+                      if (billingResult.getResponseCode() == BillingClient.BillingResponseCode.OK) {
+                          handlePurchases(purchases != null ? purchases : new ArrayList<>());
+                      } else {
+                          showSubscriptionPrompt("Please subscribe to Food Order App to continue.");
+                      }
+                  });
+              }
+
+              private void handlePurchases(@NonNull List<Purchase> purchases) {
+                  boolean activeFound = false;
+                  String matchedPlan = "";
+
+                  for (Purchase purchase : purchases) {
+                      if (purchase.getPurchaseState() == Purchase.PurchaseState.PURCHASED && !purchase.isSuspended()) {
+                          List<String> products = purchase.getProducts();
+                          if (products.contains(SUB_ANNUAL_ID)) {
+                              activeFound = true;
+                              matchedPlan = "ANNUAL SUBSCRIPTION";
+                          } else if (products.contains(SUB_MONTHLY_ID)) {
+                              activeFound = true;
+                              matchedPlan = "MONTHLY SUBSCRIPTION";
+                          }
+
+                          if (!purchase.isAcknowledged()) {
+                              AcknowledgePurchaseParams ackParams = AcknowledgePurchaseParams.newBuilder()
+                                      .setPurchaseToken(purchase.getPurchaseToken())
+                                      .build();
+                              billingClient.acknowledgePurchase(ackParams, ackResult -> {
+                                  // Acknowledged
+                              });
+                          }
+                      }
+                  }
+
+                  hasActiveSubscription = activeFound;
+                  activePlanLabel = matchedPlan;
+
+                  if (hasActiveSubscription) {
+                      runOnUiThread(() -> {
+                          if (subscriptionDialog != null && subscriptionDialog.isShowing()) {
+                              subscriptionDialog.dismiss();
+                          }
+                          startPosApp();
+                      });
+                  } else {
+                      showSubscriptionPrompt("Active Monthly or Annual subscription required for Food Order App.");
+                  }
+              }
+
+              private void showSubscriptionPrompt(String statusMessage) {
+                  runOnUiThread(() -> {
+                      if (isFinishing() || isDestroyed()) {
+                          return;
+                      }
+                      if (subscriptionDialog != null && subscriptionDialog.isShowing()) {
+                          subscriptionDialog.dismiss();
+                      }
+
+                      LinearLayout container = new LinearLayout(this);
+                      container.setOrientation(LinearLayout.VERTICAL);
+                      int pad = (int) (18 * getResources().getDisplayMetrics().density);
+                      container.setPadding(pad, pad, pad, pad);
+
+                      TextView info = new TextView(this);
+                      info.setText(statusMessage + "\n\nChoose a subscription plan via Google Play:");
+                      info.setPadding(0, 0, 0, pad);
+                      container.addView(info);
+
+                      Button monthlyBtn = new Button(this);
+                      monthlyBtn.setText("Subscribe Monthly (" + SUB_MONTHLY_ID + ")");
+                      monthlyBtn.setOnClickListener(v -> launchSubscriptionFlow(SUB_MONTHLY_ID));
+                      container.addView(monthlyBtn);
+
+                      Button annualBtn = new Button(this);
+                      annualBtn.setText("Subscribe Annual (" + SUB_ANNUAL_ID + ")");
+                      annualBtn.setOnClickListener(v -> launchSubscriptionFlow(SUB_ANNUAL_ID));
+                      container.addView(annualBtn);
+
+                      Button refreshBtn = new Button(this);
+                      refreshBtn.setText("Refresh Subscription Status");
+                      refreshBtn.setOnClickListener(v -> queryActiveSubscriptions());
+                      container.addView(refreshBtn);
+
+                      subscriptionDialog = new AlertDialog.Builder(this)
+                              .setTitle("Food Order App Subscription")
+                              .setCancelable(false)
+                              .setView(container)
+                              .setNegativeButton("Exit", (d, w) -> finish())
+                              .create();
+                      subscriptionDialog.show();
+                  });
+              }
+
+              private void launchSubscriptionFlow(String productId) {
+                  if (billingClient == null || !billingClient.isReady()) {
+                      initBillingClient();
+                      Toast.makeText(this, "Connecting to Google Play...", Toast.LENGTH_SHORT).show();
+                      return;
+                  }
+
+                  ProductDetails details;
+                  synchronized (productDetailsMap) {
+                      details = productDetailsMap.get(productId);
+                  }
+
+                  if (details == null || details.getSubscriptionOfferDetails() == null || details.getSubscriptionOfferDetails().isEmpty()) {
+                      Toast.makeText(this, "Subscription offer not yet loaded from Play Console (" + productId + ").", Toast.LENGTH_LONG).show();
+                      querySubscriptionCatalog();
+                      return;
+                  }
+
+                  String offerToken = details.getSubscriptionOfferDetails().get(0).getOfferToken();
+                  BillingFlowParams.ProductDetailsParams productParams = BillingFlowParams.ProductDetailsParams.newBuilder()
+                          .setProductDetails(details)
+                          .setOfferToken(offerToken)
+                          .build();
+
+                  List<BillingFlowParams.ProductDetailsParams> paramsList = new ArrayList<>();
+                  paramsList.add(productParams);
+
+                  BillingFlowParams billingFlowParams = BillingFlowParams.newBuilder()
+                          .setProductDetailsParamsList(paramsList)
+                          .build();
+
+                  billingClient.launchBillingFlow(this, billingFlowParams);
               }
 
               @SuppressLint("SetJavaScriptEnabled")
@@ -2043,7 +2152,7 @@ jobs:
                       public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                           super.onPageStarted(view, url, favicon);
                           if (url != null && url.startsWith("http")) {
-                              showLoadingSpinner("Loading POS screen, please wait...", false);
+                              showLoadingSpinner("Loading Food Order App, please wait...", false);
                           }
                       }
 
@@ -2069,7 +2178,7 @@ jobs:
                               return;
                           }
                           if (!pythonReady) {
-                              showLoadingSpinner("Waiting for local POS server on port " + LOCAL_PORT + "...", true);
+                              showLoadingSpinner("Waiting for local server on port " + LOCAL_PORT + "...", true);
                           }
                       }
                   });
@@ -2100,7 +2209,7 @@ jobs:
                   loadingOverlay.addView(spinner, spinnerParams);
 
                   TextView titleView = new TextView(this);
-                  titleView.setText("Loading POS (" + APP_VERSION + ")");
+                  titleView.setText("Loading Food Order App (" + APP_VERSION + ")");
                   titleView.setTextColor(Color.WHITE);
                   titleView.setTextSize(18f);
                   titleView.setGravity(Gravity.CENTER);
@@ -2112,7 +2221,7 @@ jobs:
                   loadingOverlay.addView(titleView, titleParams);
 
                   loadingText = new TextView(this);
-                  loadingText.setText("Starting local POS server, please wait...");
+                  loadingText.setText("Starting local server, please wait...");
                   loadingText.setTextColor(Color.parseColor("#CCCCCC"));
                   loadingText.setTextSize(14f);
                   loadingText.setGravity(Gravity.CENTER);
@@ -2188,7 +2297,7 @@ jobs:
               private void startPosApp() {
                   ensurePosViewsCreated();
                   setContentView(rootLayout);
-                  showLoadingSpinner("Starting local POS server, please wait...", false);
+                  showLoadingSpinner("Starting Food Order App server, please wait...", false);
                   startPythonAndLoadUrl("http://127.0.0.1:" + LOCAL_PORT);
               }
 
@@ -2202,13 +2311,18 @@ jobs:
               }
 
               private void startPythonAndLoadUrl(String targetUrl) {
+                  if (!hasActiveSubscription) {
+                      showSubscriptionPrompt("Active Monthly or Annual subscription required.");
+                      return;
+                  }
+
                   if (pythonStarted && Python.isStarted() && pythonReady) {
-                      showLoadingSpinner("Opening POS screen...", false);
+                      showLoadingSpinner("Opening Food Order App...", false);
                       webView.loadUrl(targetUrl);
                       return;
                   }
 
-                  showLoadingSpinner("Starting local POS server, please wait...", false);
+                  showLoadingSpinner("Starting Food Order App server, please wait...", false);
 
                   pythonExecutor.execute(() -> {
                       final String[] startupError = new String[]{null};
@@ -2218,7 +2332,7 @@ jobs:
                               Python.start(new AndroidPlatform(getApplicationContext()));
                           }
 
-                          File dataDir = new File(getFilesDir(), "pos_data");
+                          File dataDir = new File(getFilesDir(), "food_order_data");
                           if (!dataDir.exists()) {
                               dataDir.mkdirs();
                           }
@@ -2228,13 +2342,8 @@ jobs:
                           PyObject environ = osModule.get("environ");
                           environ.callAttr("__setitem__", "POS_DATA_DIR", dataDir.getAbsolutePath());
                           environ.callAttr("__setitem__", "POS_APP_VERSION", APP_VERSION);
-
-                          int daysLeft = LicenseManager.getRemainingDays(this);
-                          String expiryStr = LicenseManager.getSavedExpiryDate(this);
-                          boolean whitelisted = LicenseManager.isWhitelistedDevice(this);
-                          environ.callAttr("__setitem__", "POS_LICENSE_DAYS_LEFT", String.valueOf(daysLeft));
-                          environ.callAttr("__setitem__", "POS_LICENSE_EXPIRY", expiryStr);
-                          environ.callAttr("__setitem__", "POS_LICENSE_WHITELISTED", whitelisted ? "1" : "0");
+                          environ.callAttr("__setitem__", "POS_SUB_ACTIVE", hasActiveSubscription ? "1" : "0");
+                          environ.callAttr("__setitem__", "POS_SUB_PLAN", activePlanLabel);
 
                           if (!pythonStarted) {
                               pythonStarted = true;
@@ -2279,7 +2388,7 @@ jobs:
                           pythonReady = true;
                           runOnUiThread(() -> {
                               if (!isFinishing() && !isDestroyed() && webView != null) {
-                                  showLoadingSpinner("Opening POS screen...", false);
+                                  showLoadingSpinner("Opening Food Order App...", false);
                                   webView.loadUrl(targetUrl);
                               }
                           });
@@ -2298,234 +2407,11 @@ jobs:
               @Override
               protected void onDestroy() {
                   super.onDestroy();
+                  if (billingClient != null) {
+                      billingClient.endConnection();
+                  }
                   pythonExecutor.shutdownNow();
                   mainHandler.removeCallbacksAndMessages(null);
-              }
-
-              public static class LicenseManager {
-                  private static final String PREFS_NAME = "pos_license_prefs";
-                  private static final String KEY_SAVED_LICENSE = "saved_license_key";
-                  private static final String KEY_LAST_SEEN_DATE = "last_seen_date_yyyymmdd";
-                  private static final String[] WHITELISTED_DEVICE_IDS = {
-                          "Bddb4abb6d76b0e8"
-                  };
-
-                  public static class ValidationResult {
-                      public final boolean valid;
-                      public final String message;
-
-                      public ValidationResult(boolean valid, String message) {
-                          this.valid = valid;
-                          this.message = message;
-                      }
-                  }
-
-                  public static String getDeviceId(Context context) {
-                      String androidId = Settings.Secure.getString(
-                              context.getContentResolver(),
-                              Settings.Secure.ANDROID_ID
-                      );
-                      return androidId == null ? "unknown_device" : androidId.trim();
-                  }
-
-                  public static boolean isWhitelistedDevice(Context context) {
-                      String currentId = getDeviceId(context);
-                      for (String id : WHITELISTED_DEVICE_IDS) {
-                          if (id != null && id.trim().equalsIgnoreCase(currentId)) {
-                              return true;
-                          }
-                      }
-                      return false;
-                  }
-
-                  public static String getSavedExpiryDate(Context context) {
-                      SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-                      String savedKey = prefs.getString(KEY_SAVED_LICENSE, "");
-                      if (savedKey != null && savedKey.contains("-")) {
-                          String candidate = savedKey.split("-")[0].trim();
-                          if (candidate.matches("\\d{8}")) {
-                              return candidate;
-                          }
-                      }
-                      return "";
-                  }
-
-                  public static int getRemainingDays(Context context) {
-                      if (isWhitelistedDevice(context)) {
-                          return -1;
-                      }
-                      String expiryStr = getSavedExpiryDate(context);
-                      if (expiryStr.isEmpty()) {
-                          return -1;
-                      }
-                      Date expiryDate = parseYyyyMmDd(expiryStr);
-                      Date todayDate = getTodayDateOnly();
-                      if (expiryDate == null || todayDate == null) {
-                          return -1;
-                      }
-                      long diffMillis = expiryDate.getTime() - todayDate.getTime();
-                      long diffDays = diffMillis / (1000L * 60 * 60 * 24);
-                      return (int) Math.max(0L, diffDays);
-                  }
-
-                  public static ValidationResult activateKey(Context context, String rawKey) {
-                      if (isWhitelistedDevice(context)) {
-                          String cleanKey = rawKey == null ? "" : rawKey.trim().toUpperCase(Locale.US);
-                          SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-                          prefs.edit()
-                                  .putString(KEY_SAVED_LICENSE, cleanKey)
-                                  .putString(KEY_LAST_SEEN_DATE, formatYyyyMmDd(getTodayDateOnly()))
-                                  .apply();
-                          return new ValidationResult(true, "License activated successfully.");
-                      }
-
-                      if (rawKey == null || rawKey.trim().isEmpty()) {
-                          return new ValidationResult(false, "Please enter a license key.");
-                      }
-
-                      String normalizedKey = rawKey.trim().toUpperCase(Locale.US);
-                      String[] parts = normalizedKey.split("-");
-                      if (parts.length != 2) {
-                          return new ValidationResult(false, "Invalid key format.");
-                      }
-
-                      String expiryStr = parts[0].trim();
-                      String providedSig = parts[1].trim();
-
-                      if (!expiryStr.matches("\\d{8}") || providedSig.length() != 12) {
-                          return new ValidationResult(false, "Invalid key format or length.");
-                      }
-
-                      Date expiryDate = parseYyyyMmDd(expiryStr);
-                      Date todayDate = getTodayDateOnly();
-                      String todayStr = formatYyyyMmDd(todayDate);
-
-                      if (expiryDate == null) {
-                          return new ValidationResult(false, "Invalid expiration date in key.");
-                      }
-
-                      String expectedSig = computeShortHmac(getDeviceId(context), expiryStr);
-                      if (!MessageDigest.isEqual(
-                              expectedSig.getBytes(StandardCharsets.UTF_8),
-                              providedSig.getBytes(StandardCharsets.UTF_8))) {
-                          return new ValidationResult(false, "License key does not match this device.");
-                      }
-
-                      if (todayDate.after(expiryDate)) {
-                          return new ValidationResult(false, "This license key has expired.");
-                      }
-
-                      SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-                      String lastSeenStr = prefs.getString(KEY_LAST_SEEN_DATE, null);
-                      if (lastSeenStr != null) {
-                          Date lastSeenDate = parseYyyyMmDd(lastSeenStr);
-                          if (lastSeenDate != null && todayDate.before(lastSeenDate)) {
-                              return new ValidationResult(false, "System clock change detected. Please check device date.");
-                          }
-                      }
-
-                      String updatedLastSeen = (lastSeenStr == null || todayStr.compareTo(lastSeenStr) > 0)
-                              ? todayStr
-                              : lastSeenStr;
-
-                      prefs.edit()
-                              .putString(KEY_SAVED_LICENSE, normalizedKey)
-                              .putString(KEY_LAST_SEEN_DATE, updatedLastSeen)
-                              .apply();
-
-                      return new ValidationResult(true, "License activated successfully.");
-                  }
-
-                  public static boolean isLicenseActive(Context context) {
-                      if (isWhitelistedDevice(context)) {
-                          return true;
-                      }
-
-                      SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-                      Date todayDate = getTodayDateOnly();
-                      String todayStr = formatYyyyMmDd(todayDate);
-
-                      String lastSeenStr = prefs.getString(KEY_LAST_SEEN_DATE, null);
-                      if (lastSeenStr != null) {
-                          Date lastSeenDate = parseYyyyMmDd(lastSeenStr);
-                          if (lastSeenDate != null && todayDate.before(lastSeenDate)) {
-                              return false;
-                          }
-                      }
-
-                      String savedKey = prefs.getString(KEY_SAVED_LICENSE, null);
-                      if (savedKey == null || savedKey.isEmpty()) {
-                          return false;
-                      }
-
-                      String[] parts = savedKey.split("-");
-                      if (parts.length != 2) {
-                          return false;
-                      }
-
-                      String expiryStr = parts[0].trim();
-                      String savedSig = parts[1].trim();
-                      Date expiryDate = parseYyyyMmDd(expiryStr);
-                      if (expiryDate == null || todayDate.after(expiryDate)) {
-                          return false;
-                      }
-
-                      String expectedSig = computeShortHmac(getDeviceId(context), expiryStr);
-                      boolean sigMatches = MessageDigest.isEqual(
-                              expectedSig.getBytes(StandardCharsets.UTF_8),
-                              savedSig.getBytes(StandardCharsets.UTF_8)
-                      );
-                      if (!sigMatches) {
-                          return false;
-                      }
-
-                      if (lastSeenStr == null || todayStr.compareTo(lastSeenStr) > 0) {
-                          prefs.edit().putString(KEY_LAST_SEEN_DATE, todayStr).apply();
-                      }
-
-                      return true;
-                  }
-
-                  private static String computeShortHmac(String deviceId, String expiryStr) {
-                      try {
-                          String cleanId = deviceId == null ? "" : deviceId.trim();
-                          String pepper = BuildConfig.LICENSE_PEPPER == null ? "" : BuildConfig.LICENSE_PEPPER.trim();
-                          String payload = cleanId + ":" + expiryStr + ":" + pepper;
-                          MessageDigest digest = MessageDigest.getInstance("SHA-256");
-                          byte[] hashBytes = digest.digest(payload.getBytes(StandardCharsets.UTF_8));
-                          String hex = bytesToHex(hashBytes).toUpperCase(Locale.US);
-                          return hex.substring(0, 12);
-                      } catch (Exception e) {
-                          return "";
-                      }
-                  }
-
-                  private static Date getTodayDateOnly() {
-                      String todayStr = new SimpleDateFormat("yyyyMMdd", Locale.US).format(new Date());
-                      return parseYyyyMmDd(todayStr);
-                  }
-
-                  private static String formatYyyyMmDd(Date date) {
-                      return new SimpleDateFormat("yyyyMMdd", Locale.US).format(date);
-                  }
-
-                  private static Date parseYyyyMmDd(String yyyymmdd) {
-                      try {
-                          SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd", Locale.US);
-                          sdf.setLenient(false);
-                          return sdf.parse(yyyymmdd);
-                      } catch (ParseException e) {
-                          return null;
-                      }
-                  }
-
-                  private static String bytesToHex(byte[] bytes) {
-                      StringBuilder sb = new StringBuilder(bytes.length * 2);
-                      for (byte b : bytes) {
-                          sb.append(String.format(Locale.US, "%02x", b));
-                      }
-                      return sb.toString();
-                  }
               }
           }
           EOF
@@ -2535,11 +2421,11 @@ jobs:
         run: |
           echo "$KEYSTORE_BASE64" | base64 -d > app/release.jks
 
-      - name: Build Signed Release v9.11.13 APK
-        run: gradle assembleRelease --no-daemon
+      - name: Build Signed Release v9.12.0 AAB
+        run: gradle bundleRelease --no-daemon
 
-      - name: Upload APK Artifact
+      - name: Upload AAB Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: VendorPOS_v9.11.13_APK
-          path: app/build/outputs/apk/release/*.apk
+          name: FoodOrderApp_v9.12.0_AAB
+          path: app/build/outputs/bundle/release/*.aab
