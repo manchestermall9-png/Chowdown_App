@@ -2,7 +2,7 @@ name: Native Android Build
 
 on:
   push:
-    branches: [ main, master, Commercial4, Commercial5 ]
+    branches: [ main, master, Commercial4, Commercial5, Commercial6 ]
   workflow_dispatch:
 
 env:
@@ -53,7 +53,7 @@ jobs:
           cat << 'PYEOF' > app/src/main/python/pos_server.py
           #!/usr/bin/env python3
           # =========================================================
-          # POS / KITCHEN SYSTEM - VERSION v9.11.13
+          # POS / KITCHEN SYSTEM - VERSION v9.11.13 (Commercial6)
           # =========================================================
 
           import json, os, threading, socket, urllib.request, datetime
@@ -313,16 +313,6 @@ jobs:
                   save(F_CONSENT, consents)
               return get_phones_with_consent()
 
-          def delete_all_no_phones():
-              consents = load_consents_map()
-              no_numbers = {p for p, info in consents.items() if info.get("status") == "NO"}
-              remaining = [p for p in get_cleaned_phones() if p not in no_numbers]
-              write_phones_file(remaining)
-              for p in no_numbers:
-                  consents.pop(p, None)
-              save(F_CONSENT, consents)
-              return get_phones_with_consent(), len(no_numbers)
-
           def get_phones_with_consent():
               phones = get_cleaned_phones()
               consents = load_consents_map()
@@ -533,10 +523,20 @@ jobs:
                 const [newCategoryName, setNewCategoryName] = useState("");
 
                 const [phoneRecords, setPhoneRecords] = useState([]);
+                const [phoneSearch, setPhoneSearch] = useState("");
                 const [selectedPhones, setSelectedPhones] = useState(new Set());
                 const [bulkSmsMessage, setBulkSmsMessage] = useState("Check out our latest specials today!");
 
-                const phoneNumbers = useMemo(() => phoneRecords.map(r => r.phone), [phoneRecords]);
+                const filteredPhoneRecords = useMemo(() => {
+                  const q = (phoneSearch || "").replace(/\\s+/g, "").toLowerCase();
+                  if (!q) return phoneRecords;
+                  return phoneRecords.filter(r =>
+                    (r.phone || "").toLowerCase().includes(q) ||
+                    (r.consent || "").toLowerCase().includes(q)
+                  );
+                }, [phoneRecords, phoneSearch]);
+
+                const phoneNumbers = useMemo(() => filteredPhoneRecords.map(r => r.phone), [filteredPhoneRecords]);
 
                 const applyPhoneRecords = (list) => {
                   const arr = Array.isArray(list) ? list : [];
@@ -945,32 +945,6 @@ jobs:
                   }
                 };
 
-                const handleDeleteAllNo = async () => {
-                  const noCount = phoneRecords.filter(r => r.consent === 'NO').length;
-                  if (noCount === 0) {
-                    return alert("There are no numbers marked NO to delete.");
-                  }
-                  if (!window.confirm(`Delete all ${noCount} number(s) marked NO?`)) return;
-                  try {
-                    const res = await fetch('/api/phones/delete_no', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({})
-                    });
-                    if (res.ok) {
-                      setIsOnline(true);
-                      const data = await res.json();
-                      applyPhoneRecords(data.phones);
-                      alert(`Deleted ${data.deleted_count ?? noCount} number(s) marked NO.`);
-                    } else {
-                      alert("Failed to delete NO numbers.");
-                    }
-                  } catch (e) {
-                    setIsOnline(false);
-                    alert("⚠️ Network Offline! Could not delete NO numbers.");
-                  }
-                };
-
                 const handleDeletePhone = async (phone) => {
                   if (!window.confirm(`Delete ${phone} from saved numbers?`)) return;
                   try {
@@ -1356,20 +1330,18 @@ jobs:
                       React.createElement('div', { className: 'card' },
                         React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 } },
                           React.createElement('h4', { style: { color: '#facc15', margin: 0 } }, 'Select Contacts (' + selectedPhones.size + ' selected)'),
-                          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
-                            React.createElement('button', {
-                              type: 'button',
-                              className: 'btn btn-red',
-                              style: { padding: '6px 10px', fontSize: 12 },
-                              onClick: handleDeleteAllNo
-                            }, 'Delete All NO'),
-                            React.createElement('label', { style: { display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', margin: 0 } },
-                              React.createElement('input', { type: 'checkbox', checked: selectedPhones.size === phoneNumbers.length && phoneNumbers.length > 0, onChange: selectAllPhones, style: { width: 16, height: 16, margin: 0 } }),
-                              'Select All'
-                            )
+                          React.createElement('label', { style: { display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', margin: 0 } },
+                            React.createElement('input', { type: 'checkbox', checked: selectedPhones.size === phoneNumbers.length && phoneNumbers.length > 0, onChange: selectAllPhones, style: { width: 16, height: 16, margin: 0 } }),
+                            'Select All Shown'
                           )
                         ),
-                        phoneRecords.map(rec => {
+                        React.createElement('input', {
+                          type: 'text',
+                          placeholder: 'Search phone number or YES / NO...',
+                          value: phoneSearch,
+                          onChange: e => setPhoneSearch(e.target.value)
+                        }),
+                        filteredPhoneRecords.map(rec => {
                           const isYes = rec.consent === 'YES';
                           const isNo = rec.consent === 'NO';
                           const boxLabel = isYes ? 'YES' : (isNo ? 'NO' : 'NO / YES');
@@ -1570,15 +1542,6 @@ jobs:
                               self.wfile.write(json.dumps({"ok": True, "phones": updated_records}).encode())
                               return
 
-                          if p == '/api/phones/delete_no':
-                              updated_records, deleted_count = delete_all_no_phones()
-                              self.send_response(200)
-                              self.send_header('Content-Type', 'application/json')
-                              self.send_header('Access-Control-Allow-Origin', '*')
-                              self.end_headers()
-                              self.wfile.write(json.dumps({"ok": True, "phones": updated_records, "deleted_count": deleted_count}).encode())
-                              return
-
                           if p == '/api/phones/delete':
                               updated_records = delete_phone_number(data.get('phone', ''))
                               self.send_response(200)
@@ -1643,11 +1606,19 @@ jobs:
                                       if phone_number not in existing:
                                           existing.append(phone_number)
                                           write_phones_file(existing)
-                                      if 'popi_marketing_consent' in data:
-                                          consents = load_consents_map()
-                                          status_choice = "YES" if bool(data.get('popi_marketing_consent')) else "NO"
+                                      consents = load_consents_map()
+                                      existing_status = consents.get(phone_number, {}).get("status", "")
+                                      if existing_status == "NO":
+                                          pass
+                                      elif 'popi_marketing_consent' in data and bool(data.get('popi_marketing_consent')):
                                           consents[phone_number] = {
-                                              "status": status_choice,
+                                              "status": "YES",
+                                              "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+                                          }
+                                          save(F_CONSENT, consents)
+                                      elif existing_status == "":
+                                          consents[phone_number] = {
+                                              "status": "NO",
                                               "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
                                           }
                                           save(F_CONSENT, consents)
@@ -1660,7 +1631,10 @@ jobs:
                               if data.get('trigger_sms'):
                                   order_num = data.get('num')
                                   st_name = load_store_config().get("store_name", "MY STORE")
-                                  sms_msg = f"Hi! Your {st_name} order #{order_num} is READY for collection. Please pick it up at {st_name}. Thank you!"
+                                  sms_msg = (
+                                      f"Hi, your order #{order_num} is ready for collection at {st_name}. "
+                                      f"Future specials/promos via SMS? Reply YES or NO."
+                                  )
                                   res_sms = send_sms(data.get('phone', ''), sms_msg)
                                   sms_sent = bool(res_sms and res_sms.get("ok"))
                                   data.pop('trigger_sms', None)
@@ -1689,7 +1663,10 @@ jobs:
                               save(F_CAT, categories)
                           elif p == '/api/bulk-sms':
                               numbers = data.get('numbers', [])
-                              msg = data.get('message', '')
+                              raw_msg = str(data.get('message', '') or '').strip()
+                              st_name = load_store_config().get("store_name", "MY STORE")
+                              opt_out_line = f"{st_name}: Reply STOP to opt out of promos."
+                              msg = raw_msg if "opt out" in raw_msg.lower() or "stop" in raw_msg.lower() else f"{raw_msg}\n{opt_out_line}"
                               consents = load_consents_map()
                               sent_count = 0
                               for num in numbers:
