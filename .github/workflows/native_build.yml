@@ -35,7 +35,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.5'
+          gradle-version: '8.9'
 
       - name: Generate Project Structure & Copy v9.12.0 Files
         run: |
@@ -441,7 +441,7 @@ jobs:
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <title>Food Order App v9.12.0</title>
             <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
-            <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react.production.min.js"></script>
             <style>
               body{margin:0;font-family:sans-serif;background:#09090b;color:#fafafa;padding-bottom:50px}
               .header{background:#18181b;border-bottom:2px solid #27272a;padding:14px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:100;flex-wrap:wrap;gap:8px}
@@ -474,7 +474,7 @@ jobs:
           <body>
             <div id="root"></div>
             <script>
-              const { useState, useEffect, useMemo } = React;
+              const { useState, useEffect, useMemo, useRef } = React;
               const { createRoot } = ReactDOM;
 
               function App() {
@@ -502,6 +502,13 @@ jobs:
                 const [storeNameInput, setStoreNameInput] = useState("FOOD ORDER APP");
                 const [smsEnabled, setSmsEnabled] = useState(false);
                 const [winsmsKeyInput, setWinsmsKeyInput] = useState("");
+                const [isEditingSms, setIsEditingSms] = useState(false);
+                const isEditingSmsRef = useRef(false);
+
+                const setEditingSmsFlag = (val) => {
+                  isEditingSmsRef.current = !!val;
+                  setIsEditingSms(!!val);
+                };
 
                 const [newItemName, setNewItemName] = useState("");
                 const [newItemCat, setNewItemCat] = useState("CHICKEN");
@@ -608,7 +615,7 @@ jobs:
                       }
 
                       const smsRes = await fetch('/api/sms_config');
-                      if (smsRes.ok) {
+                      if (smsRes.ok && !isEditingSmsRef.current) {
                         const smsData = await smsRes.json();
                         setSmsEnabled(!!smsData.sms_enabled);
                         setWinsmsKeyInput(smsData.winsms_key || "");
@@ -626,6 +633,8 @@ jobs:
                 useEffect(() => {
                   if (role === 'SETUP') {
                     setStoreNameInput(storeName);
+                  } else {
+                    setEditingSmsFlag(false);
                   }
                 }, [role, storeName]);
 
@@ -805,6 +814,7 @@ jobs:
                       const data = await res.json();
                       setSmsEnabled(!!data.sms_enabled);
                       setWinsmsKeyInput(data.winsms_key || "");
+                      setEditingSmsFlag(false);
                       alert(data.sms_enabled ? "Custom SMS activated and API key saved!" : "Custom SMS settings saved.");
                     }
                   } catch (err) {
@@ -860,7 +870,7 @@ jobs:
                   if (categories.includes(formatted)) return alert("Category already exists");
                   const newCats = [...categories, formatted];
                   try {
-                    await fetch('/api/categories', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(newCats) });
+                    await fetch('/api/categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newCats) });
                     setCategories(newCats); setNewCategoryName("");
                     alert("Category added!");
                   } catch(e) { alert("Failed to add category."); }
@@ -1136,12 +1146,16 @@ jobs:
                       ),
                       React.createElement('div', { className: 'card' },
                         React.createElement('h4', { style: { color: '#facc15', margin: '0 0 10px 0' } }, 'Custom SMS Settings (WinSMS)'),
+                        isEditingSms && React.createElement('div', { style: { color: '#facc15', fontSize: 12, marginBottom: 8 } }, 'Editing SMS settings — background refresh paused until saved.'),
                         React.createElement('form', { onSubmit: handleSaveSmsConfig },
                           React.createElement('label', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, cursor: 'pointer', fontWeight: 'bold' } },
                             React.createElement('input', {
                               type: 'checkbox',
                               checked: smsEnabled,
-                              onChange: e => setSmsEnabled(e.target.checked),
+                              onChange: e => {
+                                setEditingSmsFlag(true);
+                                setSmsEnabled(e.target.checked);
+                              },
                               style: { width: 20, height: 20, margin: 0 }
                             }),
                             'Activate Custom SMS (Customer WinSMS Account)'
@@ -1150,7 +1164,11 @@ jobs:
                             type: 'text',
                             placeholder: 'Enter customer WinSMS API Key',
                             value: winsmsKeyInput,
-                            onChange: e => setWinsmsKeyInput(e.target.value),
+                            onFocus: () => setEditingSmsFlag(true),
+                            onChange: e => {
+                              setEditingSmsFlag(true);
+                              setWinsmsKeyInput(e.target.value);
+                            },
                             style: { opacity: 1 }
                           }),
                           React.createElement('button', { className: 'btn btn-blue', type: 'submit', style: { width: '100%' } }, 'Save SMS Settings')
@@ -1819,7 +1837,6 @@ jobs:
           import android.widget.Toast;
 
           import androidx.annotation.NonNull;
-          import androidx.annotation.Nullable;
           import androidx.appcompat.app.AppCompatActivity;
 
           import com.android.billingclient.api.AcknowledgePurchaseParams;
@@ -2415,6 +2432,18 @@ jobs:
               }
           }
           EOF
+
+      - name: Ensure Gradle Wrapper Uses 8.9
+        run: |
+          mkdir -p gradle/wrapper
+          cat << 'EOF' > gradle/wrapper/gradle-wrapper.properties
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.9-bin.zip
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          EOF
+          chmod +x gradlew 2>/dev/null || true
 
       - name: Decode Release Keystore
         if: env.KEYSTORE_BASE64 != ''
