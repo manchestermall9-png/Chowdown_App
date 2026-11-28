@@ -441,7 +441,7 @@ jobs:
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <title>Food Order App v9.12.0</title>
             <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
-            <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react.production.min.js"></script>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
             <style>
               body{margin:0;font-family:sans-serif;background:#09090b;color:#fafafa;padding-bottom:50px}
               .header{background:#18181b;border-bottom:2px solid #27272a;padding:14px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:100;flex-wrap:wrap;gap:8px}
@@ -1681,7 +1681,7 @@ jobs:
 
           cat << 'EOF' > gradle.properties
           android.useAndroidX=true
-          android.enableJetifier=true
+          android.enableJetifier=false
           EOF
 
           cat << 'EOF' > settings.gradle
@@ -1780,6 +1780,7 @@ jobs:
           }
 
           dependencies {
+              implementation platform('org.jetbrains.kotlin:kotlin-bom:1.8.22')
               implementation 'androidx.appcompat:appcompat:1.6.1'
               implementation 'com.android.billingclient:billing:9.1.0'
           }
