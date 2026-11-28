@@ -40,6 +40,7 @@ jobs:
 
       - name: Generate Project Structure & Copy v9.11.13 Files
         run: |
+          rm -f app/src/main/AndroidManifest.xml
           mkdir -p app/src/main/java/org/chowdown/pos
           mkdir -p app/src/main/python
           mkdir -p app/src/main/res/values
@@ -1859,7 +1860,7 @@ jobs:
 
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/res/android">
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
