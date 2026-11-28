@@ -68,6 +68,17 @@ jobs:
           except Exception:
               pass
 
+          def _parse_days_left():
+              raw = (os.environ.get("POS_LICENSE_DAYS_LEFT") or "").strip()
+              try:
+                  return int(raw)
+              except Exception:
+                  return -1
+
+          LICENSE_DAYS_LEFT = _parse_days_left()
+          LICENSE_EXPIRY = (os.environ.get("POS_LICENSE_EXPIRY") or "").strip()
+          LICENSE_WHITELISTED = (os.environ.get("POS_LICENSE_WHITELISTED") or "0").strip() == "1"
+
           F_ORD = os.path.join(DIR, "orders.json")
           F_STK = os.path.join(DIR, "stock.json")
           F_MEN = os.path.join(DIR, "menu.json")
@@ -400,7 +411,7 @@ jobs:
           <body>
             <div id="root"></div>
             <script>
-              const { useState, useEffect, useMemo } = React;
+              const { useState, useEffect, useMemo, useRef } = React;
               const { createRoot } = ReactDOM;
 
               function App() {
@@ -421,6 +432,11 @@ jobs:
                 const [lastOrderNum, setLastOrderNum] = useState(null);
                 const [isOnline, setIsOnline] = useState(true);
                 const [kitchenStatusMsg, setKitchenStatusMsg] = useState("");
+
+                const [licenseDaysLeft, setLicenseDaysLeft] = useState(null);
+                const [licenseWhitelisted, setLicenseWhitelisted] = useState(false);
+                const [showExpiryModal, setShowExpiryModal] = useState(false);
+                const expiryModalShownRef = useRef(false);
 
                 const [storeName, setStoreName] = useState("MY STORE");
                 const [storeNameInput, setStoreNameInput] = useState("MY STORE");
@@ -458,6 +474,22 @@ jobs:
                       if (vRes.ok) {
                         const vData = await vRes.json();
                         if (vData && vData.version) setAppVersion(vData.version);
+                      }
+
+                      const licRes = await fetch('/api/license_status');
+                      if (licRes.ok) {
+                        const licData = await licRes.json();
+                        if (typeof licData.days_left === 'number' && licData.days_left >= 0) {
+                          setLicenseDaysLeft(licData.days_left);
+                          setLicenseWhitelisted(!!licData.whitelisted);
+                          if (!licData.whitelisted && licData.days_left <= 7 && !expiryModalShownRef.current) {
+                            expiryModalShownRef.current = true;
+                            setShowExpiryModal(true);
+                          }
+                        } else {
+                          setLicenseDaysLeft(null);
+                          setLicenseWhitelisted(!!licData.whitelisted);
+                        }
                       }
 
                       const infoRes = await fetch('/api/server_info');
@@ -877,6 +909,31 @@ jobs:
                 };
 
                 return React.createElement('div', null,
+                  showExpiryModal && licenseDaysLeft !== null && React.createElement('div', {
+                    style: {
+                      position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                      background: 'rgba(0,0,0,0.75)', zIndex: 9999,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16
+                    }
+                  }, React.createElement('div', {
+                    className: 'card',
+                    style: { maxWidth: 420, width: '100%', border: '2px solid #facc15', textAlign: 'center', marginBottom: 0 }
+                  },
+                    React.createElement('h3', { style: { color: '#facc15', marginTop: 0 } }, '🔒 License Expiry Reminder'),
+                    React.createElement('p', { style: { fontSize: 16, margin: '10px 0' } },
+                      licenseDaysLeft === 0
+                        ? 'Your app license expires today (0 days remaining).'
+                        : 'Your app will expire in ' + licenseDaysLeft + (licenseDaysLeft === 1 ? ' day.' : ' days.')
+                    ),
+                    React.createElement('p', { style: { fontSize: 14, color: '#e4e4e7', marginBottom: 18 } },
+                      'Please contact willowton7@gmail.com for renewal license.'
+                    ),
+                    React.createElement('button', {
+                      className: 'btn btn-yellow',
+                      style: { width: '100%' },
+                      onClick: () => setShowExpiryModal(false)
+                    }, 'OK')
+                  )),
                   React.createElement('div', { className: 'header' },
                     React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
                       React.createElement('h2', { style: { color: '#facc15', margin: 0 } }, storeName.toUpperCase()),
@@ -906,7 +963,18 @@ jobs:
                           fontSize: 13,
                           fontWeight: '700'
                         }
-                      }, 'IP: ' + displayedHostIp + ':' + (serverPort || '8080'))
+                      }, 'IP: ' + displayedHostIp + ':' + (serverPort || '8080')),
+                      !licenseWhitelisted && licenseDaysLeft !== null && React.createElement('span', {
+                        style: {
+                          background: licenseDaysLeft <= 7 ? '#451a03' : '#1f2937',
+                          color: licenseDaysLeft <= 7 ? '#fbbf24' : '#e5e7eb',
+                          border: '1px solid ' + (licenseDaysLeft <= 7 ? '#f59e0b' : '#4b5563'),
+                          padding: '6px 10px',
+                          borderRadius: 8,
+                          fontSize: 12,
+                          fontWeight: '700'
+                        }
+                      }, '🔒 EXPIRY: ' + licenseDaysLeft + 'd')
                     ),
                     React.createElement('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
                       React.createElement('button', { className: 'btn ' + (role === 'ORDER' ? 'btn-yellow' : 'btn-zinc'), onClick: () => setRole('ORDER') }, 'ORDER'),
@@ -1200,6 +1268,20 @@ jobs:
                       self.send_header('Access-Control-Allow-Origin', '*')
                       self.end_headers()
                       self.wfile.write(json.dumps({"version": APP_VERSION}).encode())
+                      return
+
+                  if path == '/api/license_status':
+                      self.send_response(200)
+                      self.send_header('Content-Type', 'application/json')
+                      self.send_header('Access-Control-Allow-Origin', '*')
+                      self.end_headers()
+                      payload = {
+                          "days_left": LICENSE_DAYS_LEFT,
+                          "expiry": LICENSE_EXPIRY,
+                          "whitelisted": LICENSE_WHITELISTED,
+                          "warning": (not LICENSE_WHITELISTED) and (0 <= LICENSE_DAYS_LEFT <= 7)
+                      }
+                      self.wfile.write(json.dumps(payload).encode())
                       return
 
                   if path == '/api/server_info':
@@ -1935,6 +2017,13 @@ jobs:
                           environ.callAttr("__setitem__", "POS_DATA_DIR", dataDir.getAbsolutePath());
                           environ.callAttr("__setitem__", "POS_APP_VERSION", APP_VERSION);
 
+                          int daysLeft = LicenseManager.getRemainingDays(this);
+                          String expiryStr = LicenseManager.getSavedExpiryDate(this);
+                          boolean whitelisted = LicenseManager.isWhitelistedDevice(this);
+                          environ.callAttr("__setitem__", "POS_LICENSE_DAYS_LEFT", String.valueOf(daysLeft));
+                          environ.callAttr("__setitem__", "POS_LICENSE_EXPIRY", expiryStr);
+                          environ.callAttr("__setitem__", "POS_LICENSE_WHITELISTED", whitelisted ? "1" : "0");
+
                           if (!pythonStarted) {
                               pythonStarted = true;
                               pythonExecutor.execute(() -> {
@@ -2027,7 +2116,7 @@ jobs:
                       return androidId == null ? "unknown_device" : androidId.trim();
                   }
 
-                  private static boolean isWhitelistedDevice(Context context) {
+                  public static boolean isWhitelistedDevice(Context context) {
                       String currentId = getDeviceId(context);
                       for (String id : WHITELISTED_DEVICE_IDS) {
                           if (id != null && id.trim().equalsIgnoreCase(currentId)) {
@@ -2035,6 +2124,36 @@ jobs:
                           }
                       }
                       return false;
+                  }
+
+                  public static String getSavedExpiryDate(Context context) {
+                      SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                      String savedKey = prefs.getString(KEY_SAVED_LICENSE, "");
+                      if (savedKey != null && savedKey.contains("-")) {
+                          String candidate = savedKey.split("-")[0].trim();
+                          if (candidate.matches("\\d{8}")) {
+                              return candidate;
+                          }
+                      }
+                      return "";
+                  }
+
+                  public static int getRemainingDays(Context context) {
+                      if (isWhitelistedDevice(context)) {
+                          return -1;
+                      }
+                      String expiryStr = getSavedExpiryDate(context);
+                      if (expiryStr.isEmpty()) {
+                          return -1;
+                      }
+                      Date expiryDate = parseYyyyMmDd(expiryStr);
+                      Date todayDate = getTodayDateOnly();
+                      if (expiryDate == null || todayDate == null) {
+                          return -1;
+                      }
+                      long diffMillis = expiryDate.getTime() - todayDate.getTime();
+                      long diffDays = diffMillis / (1000L * 60 * 60 * 24);
+                      return (int) Math.max(0L, diffDays);
                   }
 
                   public static ValidationResult activateKey(Context context, String rawKey) {
